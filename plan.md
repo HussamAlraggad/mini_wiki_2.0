@@ -18,6 +18,12 @@
     * *DeepSeek Coder / CodeQwen* - Highly tuned for software engineering, logic, and data analysis tasks.
     * *Gemma (4B)* - Lightweight, fast alternative.
 * **Fallback Mechanism:** A built-in feature allowing the user to seamlessly switch models mid-session. If a model fails, hallucinates, or isn't suited for a specific analytical task, the TUI will permit a quick swap to an alternative local model (similar to Open-WebUI model selection).
+    * This can be done manually by the user too, using this command:
+    
+        ```bash
+        /models
+        ```
+
 * **Future Capability (Multi-Agent):** Architecture should allow future scalability to prompt multiple models simultaneously ("co-researchers") for diverse analytical perspectives, hardware permitting.
 
 ## 4. Data Ingestion & Analysis Features
