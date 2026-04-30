@@ -1,0 +1,24 @@
+# Compiled binary
+wiki
+wiki.exe
+
+# Go workspace
+go.work
+go.work.sum
+
+# Environment
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Runtime / generated
+.wiki/

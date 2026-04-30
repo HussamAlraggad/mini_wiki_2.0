@@ -37,21 +37,59 @@
     * The AI will then synthesize the external web data with the local dataset to assist in the research.
 
 ## 6. Development Roadmap
-* **Phase 1: Foundation & LLM Integration**
-    * Set up Go environment and TUI framework (e.g., Bubbletea or tview).
-    * Implement connection to local model runner (e.g., Ollama API).
-    * Build the basic chat interface and model switching/fallback mechanism.
-* **Phase 2: File System & Data Ingestion**
-    * Implement cross-directory execution logic.
-    * Build the CSV parsing and chunking engine.
-    * Integrate the persistent vector database / knowledge base for dataset memory.
-* **Phase 3: Web Fetching & Output Generation**
-    * Develop the web scraping module for external links.
-    * Implement tabular export functionality (to `.xlsx`).
-* **Phase 4: Refinement**
-    * Polish UI/UX (commands, shortcuts).
-    * Testing against large CSV files to ensure stability.
+
+### Phase 1: Foundation & LLM Integration (COMPLETE)
+- Go module + Bubbletea TUI framework
+- Ollama HTTP client with streaming, timeouts, SSRF-safe dial
+- Model manager: switching, fallback chain, active model tracking
+- Config persistence (~/.config/mini-wiki/config.yaml, 0600 perms)
+- Conversation types (Thread, Message, truncation)
+- Structured error types (16 Kind values with predicates)
+- Ollama auto-start/stop lifecycle management
+- Command auto-completion with Tab cycling
+
+### Phase 2: File System & Data Ingestion (COMPLETE)
+- Safe directory scanner (skip dotfiles, symlink checks, binary detection via magic bytes + null byte check)
+- File type detection (22 types: code, markup, data, config)
+- Streaming CSV parser with chunking, context cancellation, column type detection
+- @file reference resolver with path traversal protection + size limits
+- TUI commands: /scan, /files, /ingest, @filename auto-attach
+
+### Phase 3: Web Fetching & Output Generation (COMPLETE)
+- Web fetcher with SSRF protection (11 private CIDR blocks, DNS resolution check)
+- HTML-to-text extraction via golang.org/x/net/html (safe parsing, no regex)
+- .xlsx export with formula injection protection
+- SQLite knowledge base with FTS5 full-text search
+- TUI commands: /fetch, /export, /kbstatus, /kbquery
+
+### Phase 4: Dual Knowledge Base System (COMPLETE)
+- Project KB (per-directory SQLite in .wiki/kb.sqlite)
+  - Tables: srs_runs, srs_requirements, srs_moscow, srs_dfd_components, srs_cspec, srs_documents, query_history, bookmarks, filter_states
+- Tool Memory (global YAML in ~/.config/mini-wiki/memory/)
+  - Files: skills.yaml, flaws.yaml, session.yaml
+  - 13 pre-registered skills, flaws tracking with solutions
+- TUI commands: /bookmark, /bookmarks, /history, /skills, /flaws
+
+### Phase 5: SRS Generation Pipeline (COMPLETE)
+- 5-stage pipeline: FR/NFR Extraction - MoSCoW Prioritization - DFD Generation - CSPEC Logic - SRS Formatting
+- 5 Go text/template prompts ported from Python Jinja2 originals (IEEE 830 compliant)
+- All results stored in Project KB for cross-session reference
+- TUI command: /srs
+
+### Phase 6: Remaining Features (PLANNED)
+- Ranking Engine (relevance + importance hybrid scoring)
+- Filter Engine (filter by score, date, tags, source)
+- Batch Processor (process large datasets in chunks)
+- Setup Wizard (/wizard command)
+- Enhanced Export (JSON, Markdown, CSV, PDF)
 
 ## 7. Next Steps for the User
-1.  Review this document and append any specific dataset requirements or constraints provided by the professor.
-2.  Provide this `plan.md` to the coding assistant to begin scaffolding the Go TUI application.
+1.  Run `./wiki` and test the tool
+2.  Try `/srs` to generate an SRS document from conversation data
+3.  Report any issues via `/flaws` (logs to tool memory)
+
+## My notes:
+* There are some functionalities I need to add:
+    * The must be capable of:
+        * check the OS of the machine.
+        * install/downloads the needed dependencies (make them active immediately).
