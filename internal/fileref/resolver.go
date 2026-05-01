@@ -40,14 +40,8 @@ type ResolveResult struct {
 	TotalSize int64
 }
 
-// ResolverConfig controls resolution limits and security policies.
+	// ResolverConfig controls security policies for file references.
 type ResolverConfig struct {
-	// MaxFileSize is the per-file limit (default 1MB).
-	MaxFileSize int64
-
-	// MaxTotalSize is the cumulative limit across all refs (default 10MB).
-	MaxTotalSize int64
-
 	// MaxRefs is the max @ references per message (default 10).
 	MaxRefs int
 
@@ -58,9 +52,7 @@ type ResolverConfig struct {
 // DefaultConfig returns the default resolver settings.
 func DefaultConfig() ResolverConfig {
 	return ResolverConfig{
-		MaxFileSize:  1 * 1024 * 1024,  // 1MB
-		MaxTotalSize: 10 * 1024 * 1024, // 10MB
-		MaxRefs:      10,
+		MaxRefs: 10,
 	}
 }
 
@@ -191,16 +183,6 @@ func (r *resolver) Resolve(ctx context.Context, ref Reference, cfg ResolverConfi
 	}
 	defer f.Close()
 
-	info, err := f.Stat()
-	if err != nil {
-		return "", nil, wiki.Wrap(wiki.KindFileSystem, "stat", err)
-	}
-
-	// Size limit
-	if info.Size() > cfg.MaxFileSize {
-		return "", nil, wiki.New(wiki.KindFileTooLarge, fmt.Sprintf("file too large: %d bytes (max %d)", info.Size(), cfg.MaxFileSize))
-	}
-
 	// Binary detection
 	safe, err := filescanner.New().IsSafeTextFile(absPath)
 	if err != nil {
@@ -254,16 +236,6 @@ func (r *resolver) ResolveAll(ctx context.Context, text string, index *filescann
 		result.Refs = append(result.Refs, ref)
 		result.Contents[absPath] = data
 		result.TotalSize += int64(len(data))
-
-		if result.TotalSize > cfg.MaxTotalSize {
-			result.Errors = append(result.Errors, RefError{
-				Raw:    ref.Raw,
-				Reason: "total size limit exceeded",
-			})
-			delete(result.Contents, absPath)
-			result.TotalSize -= int64(len(data))
-			break
-		}
 	}
 
 	return result, nil

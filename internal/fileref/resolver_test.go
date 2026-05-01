@@ -122,20 +122,23 @@ func TestResolve_Basic(t *testing.T) {
 	}
 }
 
-func TestResolve_TooLarge(t *testing.T) {
+func TestResolve_LargeFile(t *testing.T) {
 	dir := t.TempDir()
-	largeData := make([]byte, 100)
+	// Create 100KB of text (not null bytes, so binary detection passes)
+	largeData := []byte(strings.Repeat("hello world this is text data\n", 100*1024/32))
 	os.WriteFile(filepath.Join(dir, "large.txt"), largeData, 0644)
 
 	r := New()
 	cfg := DefaultConfig()
 	cfg.RootDir = dir
-	cfg.MaxFileSize = 50 // 50 bytes max
 
 	ref := Reference{Raw: "@large.txt"}
-	_, _, err := r.Resolve(context.Background(), ref, cfg)
-	if err == nil {
-		t.Error("expected error for file too large")
+	_, data, err := r.Resolve(context.Background(), ref, cfg)
+	if err != nil {
+		t.Fatalf("expected no error for large file, got: %v", err)
+	}
+	if len(data) < 90000 {
+		t.Errorf("expected ~100KB data, got %d bytes", len(data))
 	}
 }
 

@@ -18,10 +18,12 @@ package main
 
 import (
 	"context"
+	"embed"
 	"flag"
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"time"
 
 	"mini-wiki/internal/app"
@@ -31,6 +33,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+//go:embed rag_worker/*.py rag_worker/*.txt
+var ragWorkerFS embed.FS
 
 func main() {
 	// Command-line flags
@@ -90,8 +95,14 @@ func main() {
 	// --- Initialize model manager ---
 	mm := modelmgr.New(client)
 
+	// --- Extract embedded RAG worker ---
+	ragDir, err := extractRAGWorker()
+	if err != nil {
+		log.Printf("Warning: RAG worker extraction failed: %v", err)
+	}
+
 	// --- Initialize TUI application ---
-	appModel := app.New(cfg, client, mm)
+	appModel := app.New(cfg, client, mm, ragDir)
 
 	// --- Run Bubbletea program ---
 	// Default: alt screen for proper full-screen TUI.
@@ -110,4 +121,36 @@ func main() {
 
 	// --- Cleanup ---
 	launcher.Shutdown()
+}
+
+// extractRAGWorker extracts the embedded Python RAG worker to a temp directory.
+func extractRAGWorker() (string, error) {
+	tmpDir, err := os.MkdirTemp("", "mini-wiki-rag")
+	if err != nil {
+		return "", fmt.Errorf("create temp dir: %w", err)
+	}
+
+	entries, err := ragWorkerFS.ReadDir("rag_worker")
+	if err != nil {
+		os.RemoveAll(tmpDir)
+		return "", fmt.Errorf("read embedded dir: %w", err)
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		data, err := ragWorkerFS.ReadFile(filepath.Join("rag_worker", entry.Name()))
+		if err != nil {
+			os.RemoveAll(tmpDir)
+			return "", fmt.Errorf("read %s: %w", entry.Name(), err)
+		}
+		dest := filepath.Join(tmpDir, entry.Name())
+		if err := os.WriteFile(dest, data, 0644); err != nil {
+			os.RemoveAll(tmpDir)
+			return "", fmt.Errorf("write %s: %w", entry.Name(), err)
+		}
+	}
+
+	return tmpDir, nil
 }

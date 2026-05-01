@@ -21,6 +21,7 @@ import (
 	"mini-wiki/internal/modelmgr"
 	"mini-wiki/internal/ollama"
 	"mini-wiki/internal/projectkb"
+	"mini-wiki/internal/rag"
 	"mini-wiki/internal/srs"
 	"mini-wiki/internal/webfetch"
 
@@ -240,8 +241,10 @@ type Application struct {
 	parser   csvparser.Parser
 	fileref  fileref.Resolver
 	fetcher   webfetch.Fetcher
-	exporter  export.Exporter
-	pkb      projectkb.DB
+	exporter   export.Exporter
+	pkb       projectkb.DB
+	ragClient *rag.Client
+	ragDir    string
 	mem        memory.MemStore
 	srsPipeline *srs.Pipeline
 
@@ -288,7 +291,8 @@ type Application struct {
 }
 
 // New creates a new Application with initialized components.
-func New(cfg *config.Manager, client ollama.Client, mm *modelmgr.Manager) *Application {
+// ragWorkerDir is the directory containing the extracted Python RAG worker (empty if unavailable).
+func New(cfg *config.Manager, client ollama.Client, mm *modelmgr.Manager, ragWorkerDir string) *Application {
 	ti := textinput.New()
 	ti.Placeholder = "Type a message... (/help for commands)"
 	ti.Focus()
@@ -314,9 +318,11 @@ func New(cfg *config.Manager, client ollama.Client, mm *modelmgr.Manager) *Appli
 		parser:    csvparser.New(),
 		fileref:   fileref.New(),
 		fetcher:   webfetch.New(),
-		exporter:  export.New(),
-		pkb:       projectkb.New(),
-		mem:       memory.New(),
+		exporter:   export.New(),
+		pkb:        projectkb.New(),
+		mem:        memory.New(),
+		ragClient:  rag.New(),
+		ragDir:     ragWorkerDir,
 		thread:    conversation.NewThread("You are a helpful research assistant specializing in Software Engineering. Provide thorough, well-reasoned answers."),
 		input:     ti,
 		spinner:   s,
@@ -327,10 +333,8 @@ func New(cfg *config.Manager, client ollama.Client, mm *modelmgr.Manager) *Appli
 			MaxSize: 100 * 1024 * 1024,
 		},
 		refCfg: fileref.ResolverConfig{
-			MaxFileSize:  100 * 1024 * 1024,
-			MaxTotalSize: 500 * 1024 * 1024,
-			MaxRefs:      10,
-			RootDir:      rootDir,
+			MaxRefs: 10,
+			RootDir: rootDir,
 		},
 		fetchCfg:  webfetch.DefaultConfig(),
 		exportCfg: export.DefaultConfig(),
@@ -497,6 +501,20 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			content = strings.Join(memParts, "\n") + "\n\nCurrent question: " + content
 	}
 
+	// Auto-RAG: search the vector database for relevant context (non-blocking)
+	ragResult, _ := a.queryRAG(content, 3)
+	if ragResult != nil && len(ragResult.Sources) > 0 {
+		var ragParts []string
+		ragParts = append(ragParts, "\n[Retrieved from knowledge base:]")
+		for _, src := range ragResult.Sources {
+			ragParts = append(ragParts, fmt.Sprintf("  Source: %s (score: %.2f)", src.File, src.Score))
+			ragParts = append(ragParts, "  "+src.Text)
+		}
+		ragParts = append(ragParts, "[/End of retrieved context]\n")
+		content = strings.Join(ragParts, "\n") + "\n\nQuestion: " + content
+		a.appendToViewport(fmt.Sprintf("[RAG: %d sources retrieved]", len(ragResult.Sources)))
+	}
+
 	// Add user message to thread
 	a.thread.Add(conversation.Message{
 		Role:    conversation.RoleUser,
@@ -552,6 +570,8 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.statusMsg = fmt.Sprintf("Read %s (%s)", filepath.Base(msg.Path), humanBytes(msg.Size))
 		header := fmt.Sprintf("\n--- %s ---\n", msg.Path)
 		a.appendToViewport(helpStyle.Render(header + msg.Content))
+		// Also send to RAG worker for indexing (background)
+		a.ingestRAG(msg.Path)
 		return a, nil
 
 	case IngestFailed:
@@ -1966,6 +1986,58 @@ func srsPipelineCmd(pipeline *srs.Pipeline, data string) tea.Cmd {
 			RunID:   string(results.RunID),
 		}
 	}
+}
+
+// --- RAG helpers ---
+
+// ensureRAGStarted starts the Python RAG worker if not already running.
+// Returns true if the worker is available.
+func (a *Application) ensureRAGStarted() bool {
+	if a.ragDir == "" {
+		return false
+	}
+	if a.ragClient.IsRunning() {
+		return true
+	}
+	workerPath := filepath.Join(a.ragDir, "main.py")
+	if _, err := os.Stat(workerPath); err != nil {
+		return false
+	}
+	if err := a.ragClient.Start("python3", workerPath, a.pkb.ProjectDir(), "nomic-embed-text", a.models.Active(), "http://127.0.0.1:11434"); err != nil {
+		// Try "python" instead of "python3"
+		if err2 := a.ragClient.Start("python", workerPath, a.pkb.ProjectDir(), "nomic-embed-text", a.models.Active(), "http://127.0.0.1:11434"); err2 != nil {
+			return false
+		}
+	}
+	return true
+}
+
+// queryRAG queries the RAG worker for relevant context, returning sources and answer.
+func (a *Application) queryRAG(question string, topK int) (*rag.QueryResult, error) {
+	if !a.ensureRAGStarted() {
+		return nil, nil // RAG not available, silently skip
+	}
+	return a.ragClient.Query(question, topK)
+}
+
+// ingestRAG sends a file to the RAG worker for indexing.
+func (a *Application) ingestRAG(path string) {
+	if !a.ensureRAGStarted() {
+		return
+	}
+	// Non-blocking: run in a goroutine
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		result, err := a.ragClient.Ingest(path, "nomic-embed-text")
+		if err != nil && a.ragDir != "" {
+			a.statusMsg = fmt.Sprintf("RAG ingest error: %v", err)
+		}
+		if result != nil && result.Error != "" {
+			a.statusMsg = fmt.Sprintf("RAG ingest: %s", result.Error)
+		}
+		_ = ctx
+	}()
 }
 
 // Update the skills to mark SRS skills as implemented.
