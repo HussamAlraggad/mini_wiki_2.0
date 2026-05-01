@@ -17,8 +17,6 @@ import (
 	"mini-wiki/internal/export"
 	"mini-wiki/internal/fileref"
 	"mini-wiki/internal/filescanner"
-	"mini-wiki/internal/jsonlparser"
-	"mini-wiki/internal/kb"
 	"mini-wiki/internal/memory"
 	"mini-wiki/internal/modelmgr"
 	"mini-wiki/internal/ollama"
@@ -97,17 +95,6 @@ type (
 	}
 	ExportFailed    struct{ Err error }
 
-	// Phase 3: Knowledge base
-	KBStatusRequested struct{}
-	KBStatusComplete  struct {
-		Stats map[string]any
-	}
-	KBQueryRequested  struct{ Query string }
-	KBQueryComplete   struct {
-		Results []kb.SearchResult
-		Query   string
-	}
-
 	// Phase 4: Bookmarks & history & tool memory
 	BookmarkAddRequested struct {
 		Title       string
@@ -132,16 +119,6 @@ type (
 		RunID   string
 	}
 	SRSFailed struct{ Err error }
-
-	// JSONL
-	JSONLIngestRequested struct{ Path string }
-	JSONLIngestComplete  struct {
-		Path   string
-		Rows   int
-		Fields []string
-		Text   string
-	}
-	JSONLIngestFailed struct{ Err error }
 
 	// Tasks
 	TaskAddRequested   struct{ Text string }
@@ -264,9 +241,7 @@ type Application struct {
 	fileref  fileref.Resolver
 	fetcher   webfetch.Fetcher
 	exporter  export.Exporter
-	jsonlPars jsonlparser.Parser
-	kb       kb.DB
-	pkb        projectkb.DB
+	pkb      projectkb.DB
 	mem        memory.MemStore
 	srsPipeline *srs.Pipeline
 
@@ -340,9 +315,7 @@ func New(cfg *config.Manager, client ollama.Client, mm *modelmgr.Manager) *Appli
 		fileref:   fileref.New(),
 		fetcher:   webfetch.New(),
 		exporter:  export.New(),
-		kb:        kb.New(),
 		pkb:       projectkb.New(),
-		jsonlPars: jsonlparser.New(),
 		mem:       memory.New(),
 		thread:    conversation.NewThread("You are a helpful research assistant specializing in Software Engineering. Provide thorough, well-reasoned answers."),
 		input:     ti,
@@ -351,11 +324,11 @@ func New(cfg *config.Manager, client ollama.Client, mm *modelmgr.Manager) *Appli
 		showWelcome: true,
 		scanCfg: filescanner.ScannerConfig{
 			RootDir: rootDir,
-			MaxSize: 10 * 1024 * 1024,
+			MaxSize: 100 * 1024 * 1024,
 		},
 		refCfg: fileref.ResolverConfig{
-			MaxFileSize:  1 * 1024 * 1024,
-			MaxTotalSize: 10 * 1024 * 1024,
+			MaxFileSize:  100 * 1024 * 1024,
+			MaxTotalSize: 500 * 1024 * 1024,
 			MaxRefs:      10,
 			RootDir:      rootDir,
 		},
@@ -493,22 +466,53 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		// Add user message to thread
-		a.thread.Add(conversation.Message{
-			Role:    conversation.RoleUser,
-			Content: content,
-		})
-		a.updateTokenCount()
+		// Auto-save to project KB memory (non-blocking, errors logged)
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = a.pkb.SaveHistory(ctx, &projectkb.HistoryEntry{
+				Query: content,
+				Model: a.models.Active(),
+			})
+		}()
 
-		// Render user message in viewport
-		a.appendToViewport(formatUserMsg(content))
+		// Retrieve relevant memory from past conversations (non-blocking)
+		memoryCtx, memoryCancel := context.WithTimeout(context.Background(), 3*time.Second)
+		pastEntries, _ := a.pkb.SearchHistory(memoryCtx, content, 3)
+		memoryCancel()
+		if len(pastEntries) > 0 {
+			var memParts []string
+			memParts = append(memParts, "\n[Previous relevant context from past sessions:]")
+			for _, e := range pastEntries {
+				if e.Response != "" {
+					memParts = append(memParts, "Q: "+e.Query)
+					if len(e.Response) > 200 {
+						memParts = append(memParts, "A: "+e.Response[:200]+"...")
+					} else {
+						memParts = append(memParts, "A: "+e.Response)
+					}
+				}
+			}
+			memParts = append(memParts, "[/End of past context]\n")
+			content = strings.Join(memParts, "\n") + "\n\nCurrent question: " + content
+	}
 
-		// Clear input and start streaming
-		a.input.SetValue("")
-		a.errMsg = ""
-		a.statusMsg = fmt.Sprintf("Thinking (%s)...", a.models.Active())
+	// Add user message to thread
+	a.thread.Add(conversation.Message{
+		Role:    conversation.RoleUser,
+		Content: content,
+	})
+	a.updateTokenCount()
 
-		return a, streamChatCmd(a.client, a.models, a.thread)
+	// Render user message in viewport
+	a.appendToViewport(formatUserMsg(content))
+
+	// Clear input and start streaming
+	a.input.SetValue("")
+	a.errMsg = ""
+	a.statusMsg = fmt.Sprintf("Thinking (%s)...", a.models.Active())
+
+	return a, streamChatCmd(a.client, a.models, a.thread)
 
 	// --- File scanning ---
 	case ScanRequested:
@@ -555,32 +559,6 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.statusMsg = "Ingest failed"
 		return a, nil
 
-	// --- JSONL ---
-	case JSONLIngestRequested:
-		a.statusMsg = fmt.Sprintf("Parsing JSONL: %s...", msg.Path)
-		return a, jsonlIngestCmd(a.jsonlPars, a.fileref, msg.Path, a.refCfg)
-
-	case JSONLIngestComplete:
-		summary := fmt.Sprintf("JSONL: %d rows from %s", msg.Rows, msg.Path)
-		if len(msg.Fields) > 0 {
-			summary += fmt.Sprintf(" | fields: %s", strings.Join(msg.Fields, ", "))
-		}
-		a.appendToViewport(summary)
-		a.appendToViewport("\n--- First 20 rows ---\n")
-		lines := strings.Split(msg.Text, "\n")
-		preview := lines
-		if len(preview) > 25 {
-			preview = preview[:25]
-		}
-		a.appendToViewport(strings.Join(preview, "\n"))
-		a.statusMsg = fmt.Sprintf("JSONL ingested: %d rows", msg.Rows)
-		return a, nil
-
-	case JSONLIngestFailed:
-		a.errMsg = fmt.Sprintf("JSONL failed: %v", msg.Err)
-		a.statusMsg = "JSONL failed"
-		return a, nil
-
 	// --- Web fetching ---
 	case FetchRequested:
 		a.statusMsg = fmt.Sprintf("Fetching %s...", msg.URL)
@@ -619,39 +597,6 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ExportFailed:
 		a.errMsg = fmt.Sprintf("Export failed: %v", msg.Err)
 		a.statusMsg = "Export failed"
-		return a, nil
-
-	// --- Knowledge base ---
-	case KBStatusRequested:
-		a.statusMsg = "Querying KB stats..."
-		return a, kbStatsCmd(a.kb)
-
-	case KBStatusComplete:
-		stats := msg.Stats
-		var lines []string
-		for k, v := range stats {
-			lines = append(lines, fmt.Sprintf("  %s: %v", k, v))
-		}
-		a.appendToViewport(helpStyle.Render("Knowledge Base Stats:\n" + strings.Join(lines, "\n")))
-		a.statusMsg = "KB stats ready"
-		return a, nil
-
-	case KBQueryRequested:
-		a.statusMsg = fmt.Sprintf("Searching KB for: %s", msg.Query)
-		return a, kbQueryCmd(a.kb, msg.Query)
-
-	case KBQueryComplete:
-		if len(msg.Results) == 0 {
-			a.appendToViewport(helpStyle.Render(fmt.Sprintf("No results for: %s", msg.Query)))
-		} else {
-			var b strings.Builder
-			b.WriteString(fmt.Sprintf("KB Results for '%s':\n", msg.Query))
-			for _, r := range msg.Results {
-				b.WriteString(fmt.Sprintf("  [%s] row %d: %s\n", r.SourceFile, r.RowIndex, truncateText(r.Content, 80)))
-			}
-			a.appendToViewport(helpStyle.Render(b.String()))
-		}
-		a.statusMsg = "KB query complete"
 		return a, nil
 
 	// --- Bookmarks ---
@@ -851,6 +796,16 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					Model: msg.Model,
 				},
 			})
+			// Auto-save assistant response to project KB memory
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				_ = a.pkb.SaveHistory(ctx, &projectkb.HistoryEntry{
+					Query:    "[AI response]",
+					Response: fullText,
+					Model:    msg.Model,
+				})
+			}()
 		}
 
 		a.input.Focus()
@@ -1051,11 +1006,9 @@ func (a *Application) handleCommand(cmd string) (tea.Model, tea.Cmd) {
   /system <text>  Set a new system prompt
   /scan           Scan workspace for files
   /files          List scanned files
-  /ingest <path>  Read a file into context
+  /ingest <path>  Read a file into context (auto-builds KB)
   /fetch <url>    Fetch a webpage and extract text
   /export         Export conversation data to .xlsx
-  /kbstatus       Show knowledge base stats
-  /kbquery <q>    Search the knowledge base
   /bookmark <t>   Save current finding as a bookmark
   /bookmarks      List saved bookmarks
   /history        Show recent query history
@@ -1066,9 +1019,10 @@ func (a *Application) handleCommand(cmd string) (tea.Model, tea.Cmd) {
   /srs            Run full SRS generation pipeline (5 stages)
   /exit           Quit the application
 
-File references:
-  @filename       Reference a file in the workspace (auto-attached)
-  Click panels with mouse to focus them`
+Memory & RAG:
+  Every message is auto-saved to the project KB (./.wiki/)
+  /ingest automatically builds the knowledge base
+  Chat searches past conversations for relevant context`
 		a.appendToViewport(helpStyle.Render(help))
 
 	case "/model":
@@ -1138,17 +1092,6 @@ File references:
 	case "/export":
 		return a, func() tea.Msg { return ExportRequested{} }
 
-	case "/kbstatus":
-		return a, func() tea.Msg { return KBStatusRequested{} }
-
-	case "/kbquery":
-		if len(parts) < 2 {
-			a.errMsg = "Usage: /kbquery <query>"
-			return a, nil
-		}
-		query := strings.Join(parts[1:], " ")
-		return a, func() tea.Msg { return KBQueryRequested{Query: query} }
-
 	case "/bookmark":
 		if len(parts) < 2 {
 			a.errMsg = "Usage: /bookmark <title>"
@@ -1180,13 +1123,6 @@ File references:
 
 	case "/tasks":
 		return a, func() tea.Msg { return TaskListRequested{} }
-
-	case "/jsonl":
-		if len(parts) < 2 {
-			a.errMsg = "Usage: /jsonl <file.jsonl>"
-			return a, nil
-		}
-		return a, func() tea.Msg { return JSONLIngestRequested{Path: parts[1]} }
 
 	case "/srs":
 		return a, func() tea.Msg { return SRSRequested{} }
@@ -1764,30 +1700,6 @@ func exportCmd(e export.Exporter, thread *conversation.Thread, cfg export.Export
 	}
 }
 
-func kbStatsCmd(kb kb.DB) tea.Cmd {
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		stats, err := kb.Stats(ctx)
-		if err != nil {
-			return ExportFailed{Err: err}
-		}
-		return KBStatusComplete{Stats: stats}
-	}
-}
-
-func kbQueryCmd(kb kb.DB, query string) tea.Cmd {
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		results, err := kb.SearchRows(ctx, query, 10)
-		if err != nil {
-			return ExportFailed{Err: err}
-		}
-		return KBQueryComplete{Results: results, Query: query}
-	}
-}
-
 func truncateText(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
@@ -1808,11 +1720,8 @@ var commandList = []suggestionItem{
 	{text: "/scan", description: "Scan workspace for files", category: "cmd"},
 	{text: "/files", description: "List scanned files", category: "cmd"},
 	{text: "/ingest", description: "Read a file into context", category: "cmd"},
-	{text: "/jsonl", description: "Ingest a JSONL dataset", category: "cmd"},
 	{text: "/fetch", description: "Fetch a webpage and extract text", category: "cmd"},
 	{text: "/export", description: "Export conversation to .xlsx", category: "cmd"},
-	{text: "/kbstatus", description: "Show knowledge base stats", category: "cmd"},
-	{text: "/kbquery", description: "Search the knowledge base", category: "cmd"},
 	{text: "/bookmark", description: "Save current finding", category: "cmd"},
 	{text: "/bookmarks", description: "List saved bookmarks", category: "cmd"},
 	{text: "/history", description: "Show recent query history", category: "cmd"},
@@ -2010,7 +1919,6 @@ func (a *Application) registerBuiltinSkills() {
 		{Name: "File Reference", Description: "Reference files with @filename in chat", Command: "@filename", Category: "data", Models: nil},
 		{Name: "Web Fetch", Description: "Fetch webpage content and extract text", Command: "/fetch", Category: "data", Models: nil, Note: "SSRF-safe, blocks private IPs"},
 		{Name: "Export", Description: "Export conversation to .xlsx", Command: "/export", Category: "export", Models: nil},
-		{Name: "Knowledge Base", Description: "Search ingested data with FTS5", Command: "/kbquery", Category: "data", Models: nil},
 		{Name: "Bookmarks", Description: "Save and browse important findings", Command: "/bookmark", Category: "system", Models: nil},
 		{Name: "History", Description: "Browse query history", Command: "/history", Category: "system", Models: nil},
 		{Name: "SRS Pipeline", Description: "Full SRS generation: FR/NFR, MoSCoW, DFD, CSPEC, IEEE 830", Command: "/srs", Category: "srs", Models: []string{"qwen2.5-coder", "llama3.1"}, Parameters: "temperature: 0.1"},
@@ -2056,45 +1964,6 @@ func srsPipelineCmd(pipeline *srs.Pipeline, data string) tea.Cmd {
 		return SRSComplete{
 			Content: results.SRS,
 			RunID:   string(results.RunID),
-		}
-	}
-}
-
-func jsonlIngestCmd(parser jsonlparser.Parser, resolver fileref.Resolver, path string, cfg fileref.ResolverConfig) tea.Cmd {
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-
-		ref := fileref.Reference{Raw: "@" + path}
-		absPath, data, err := resolver.Resolve(ctx, ref, cfg)
-		if err != nil {
-			return JSONLIngestFailed{Err: err}
-		}
-
-		var rows []jsonlparser.Row
-		stats, err := parser.Parse(ctx, strings.NewReader(string(data)), 0, func(chunk jsonlparser.Chunk) error {
-			rows = append(rows, chunk.Rows...)
-			return nil
-		})
-		if err != nil {
-			return JSONLIngestFailed{Err: err}
-		}
-
-		// Build combined text from all rows (first 100)
-		var textParts []string
-		maxRows := 100
-		if len(rows) < maxRows {
-			maxRows = len(rows)
-		}
-		for _, row := range rows[:maxRows] {
-			textParts = append(textParts, row.Text)
-		}
-
-		return JSONLIngestComplete{
-			Path:   absPath,
-			Rows:   stats.TotalRows,
-			Fields: stats.Fields,
-			Text:   strings.Join(textParts, "\n---\n"),
 		}
 	}
 }
