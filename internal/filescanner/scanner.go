@@ -129,6 +129,8 @@ var extensionTypeMap = map[string]FileType{
 	".csv":       FileTypeCSV,
 	".tsv":       FileTypeCSV,
 	".json":      FileTypeJSON,
+	".jsonl":     FileTypeJSON,
+	".ndjson":    FileTypeJSON,
 	".yaml":      FileTypeYAML,
 	".yml":       FileTypeYAML,
 	".xml":       FileTypeXML,

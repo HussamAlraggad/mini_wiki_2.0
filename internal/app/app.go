@@ -17,6 +17,7 @@ import (
 	"mini-wiki/internal/export"
 	"mini-wiki/internal/fileref"
 	"mini-wiki/internal/filescanner"
+	"mini-wiki/internal/jsonlparser"
 	"mini-wiki/internal/kb"
 	"mini-wiki/internal/memory"
 	"mini-wiki/internal/modelmgr"
@@ -131,7 +132,37 @@ type (
 		RunID   string
 	}
 	SRSFailed struct{ Err error }
+
+	// JSONL
+	JSONLIngestRequested struct{ Path string }
+	JSONLIngestComplete  struct {
+		Path   string
+		Rows   int
+		Fields []string
+		Text   string
+	}
+	JSONLIngestFailed struct{ Err error }
+
+	// Tasks
+	TaskAddRequested   struct{ Text string }
+	TaskToggleRequested  struct{ Index int }
+	TaskListRequested   struct{}
 )
+
+// --- Layout ---
+
+type taskItem struct {
+	text   string
+	done   bool
+}
+
+// fileNode represents one entry in the file tree (file or directory).
+// suggestionItem represents an auto-complete suggestion with metadata.
+type suggestionItem struct {
+	text        string // value inserted on Tab
+	description string // shown in hint bar
+	category    string // "cmd", "file", "ref"
+}
 
 // --- Styles ---
 
@@ -175,6 +206,45 @@ var (
 	hintStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#4B5563")).
 			Padding(0, 1)
+
+	// Input box with subtle border
+	inputBoxStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("#4B5563")).
+			Padding(0, 1)
+
+	headerStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#E2E8F0")).
+			Bold(true).
+			Padding(0, 2)
+
+	subHeaderStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#94A3B8")).
+			Padding(0, 2)
+
+	// Panel styles (center + right only)
+	panelCenterStyle = lipgloss.NewStyle().
+			Padding(0, 1)
+
+	panelRightStyle = lipgloss.NewStyle().
+			Background(lipgloss.Color("#1A1A2E")).
+			Padding(1, 2)
+
+	panelFocusStyle = lipgloss.NewStyle().
+			Background(lipgloss.Color("#1F2B47")).
+			Padding(1, 2)
+
+	panelHeaderStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("#CBD5E1"))
+
+	infoLabelStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#64748B"))
+
+	infoValueStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#CBD5E1"))
+
+	// Bottom bar styles
 )
 
 // --- Application Model ---
@@ -188,8 +258,9 @@ type Application struct {
 	scanner  filescanner.Scanner
 	parser   csvparser.Parser
 	fileref  fileref.Resolver
-	fetcher  webfetch.Fetcher
-	exporter export.Exporter
+	fetcher   webfetch.Fetcher
+	exporter  export.Exporter
+	jsonlPars jsonlparser.Parser
 	kb       kb.DB
 	pkb        projectkb.DB
 	mem        memory.MemStore
@@ -216,7 +287,7 @@ type Application struct {
 	viewportContent  string // tracks content since viewport.Model hides its content field
 
 	// Phase 2: File system state
-	fileIndex    *filescanner.ScanResult // last scan result
+	fileIndex    *filescanner.ScanResult // last scan result (for @ completion)
 	scanCfg      filescanner.ScannerConfig
 	refCfg       fileref.ResolverConfig
 
@@ -224,15 +295,23 @@ type Application struct {
 	fetchCfg     webfetch.FetcherConfig
 	exportCfg    export.ExportConfig
 
-	// Command auto-completion
-	suggestions  []string // command suggestions matching current input
-	tabIndex     int      // current tab-cycle position (-1 = no selection)
+	// Auto-completion
+	suggestions  []suggestionItem
+	tabIndex     int
+
+	// Layout state
+	estimatedTokens int
+	showWelcome    bool // show welcome logo when chat is empty
+
+	// Tasks / todo
+	tasks         []taskItem
+	actionHistory []string
 }
 
 // New creates a new Application with initialized components.
 func New(cfg *config.Manager, client ollama.Client, mm *modelmgr.Manager) *Application {
 	ti := textinput.New()
-	ti.Placeholder = "Ask a question... (/model <name> to switch, /help for commands)"
+	ti.Placeholder = "Type a message... (/help for commands)"
 	ti.Focus()
 	ti.CharLimit = 4096
 	ti.Width = 80
@@ -259,11 +338,13 @@ func New(cfg *config.Manager, client ollama.Client, mm *modelmgr.Manager) *Appli
 		exporter:  export.New(),
 		kb:        kb.New(),
 		pkb:       projectkb.New(),
+		jsonlPars: jsonlparser.New(),
 		mem:       memory.New(),
 		thread:    conversation.NewThread("You are a helpful research assistant specializing in Software Engineering. Provide thorough, well-reasoned answers."),
 		input:     ti,
 		spinner:   s,
-		statusMsg: "Initializing...",
+		statusMsg:   "Initializing...",
+		showWelcome: true,
 		scanCfg: filescanner.ScannerConfig{
 			RootDir: rootDir,
 			MaxSize: 10 * 1024 * 1024,
@@ -373,6 +454,13 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 
+		// Hide welcome logo on first real message
+		if a.showWelcome {
+			a.showWelcome = false
+			a.viewportContent = ""
+			a.viewport.SetContent("")
+		}
+
 		// Handle slash commands
 		if strings.HasPrefix(content, "/") {
 			return a.handleCommand(content)
@@ -406,6 +494,7 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			Role:    conversation.RoleUser,
 			Content: content,
 		})
+		a.updateTokenCount()
 
 		// Render user message in viewport
 		a.appendToViewport(formatUserMsg(content))
@@ -460,6 +549,32 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case IngestFailed:
 		a.errMsg = fmt.Sprintf("Ingest failed: %v", msg.Err)
 		a.statusMsg = "Ingest failed"
+		return a, nil
+
+	// --- JSONL ---
+	case JSONLIngestRequested:
+		a.statusMsg = fmt.Sprintf("Parsing JSONL: %s...", msg.Path)
+		return a, jsonlIngestCmd(a.jsonlPars, a.fileref, msg.Path, a.refCfg)
+
+	case JSONLIngestComplete:
+		summary := fmt.Sprintf("JSONL: %d rows from %s", msg.Rows, msg.Path)
+		if len(msg.Fields) > 0 {
+			summary += fmt.Sprintf(" | fields: %s", strings.Join(msg.Fields, ", "))
+		}
+		a.appendToViewport(summary)
+		a.appendToViewport("\n--- First 20 rows ---\n")
+		lines := strings.Split(msg.Text, "\n")
+		preview := lines
+		if len(preview) > 25 {
+			preview = preview[:25]
+		}
+		a.appendToViewport(strings.Join(preview, "\n"))
+		a.statusMsg = fmt.Sprintf("JSONL ingested: %d rows", msg.Rows)
+		return a, nil
+
+	case JSONLIngestFailed:
+		a.errMsg = fmt.Sprintf("JSONL failed: %v", msg.Err)
+		a.statusMsg = "JSONL failed"
 		return a, nil
 
 	// --- Web fetching ---
@@ -797,8 +912,9 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Type == tea.KeyEnter {
 			// Apply tab-completed suggestion if one is selected
 			if a.tabIndex >= 0 && len(a.suggestions) > 0 && a.tabIndex < len(a.suggestions) {
-				a.input.SetValue(a.suggestions[a.tabIndex] + " ")
-				a.input.SetCursor(len(a.suggestions[a.tabIndex]) + 1)
+				selected := a.suggestions[a.tabIndex].text
+				a.input.SetValue(selected + " ")
+				a.input.SetCursor(len(selected) + 1)
 				a.clearSuggestions()
 				return a, nil
 			}
@@ -810,14 +926,26 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 
-		// Handle Tab for command completion
+		// Handle Tab for command / file completion
 		if msg.Type == tea.KeyTab {
 			val := a.input.Value()
-			if strings.HasPrefix(val, "/") {
-				a.cycleSuggestion(val)
+			// Trigger completion for commands, @file refs, or path-like input
+			if strings.HasPrefix(val, "/") || strings.Contains(val, "@") ||
+				strings.HasPrefix(val, ".") || strings.Contains(val, "/") {
+				// If we already have suggestions, cycle; otherwise compute
+				if len(a.suggestions) > 0 && a.tabIndex >= 0 {
+					a.cycleSuggestion(val)
+				} else {
+					a.updateSuggestions()
+					if len(a.suggestions) > 0 {
+						a.tabIndex = 0
+						selected := a.suggestions[0].text
+						a.input.SetValue(selected + " ")
+						a.input.SetCursor(len(selected) + 1)
+					}
+				}
 				return a, nil
 			}
-			return a, nil
 		}
 
 		// Handle Escape to clear suggestions
@@ -844,6 +972,43 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		a.viewport, cmd = a.viewport.Update(msg)
 		return a, cmd
+
+	// --- Task messages ---
+	case TaskAddRequested:
+		if msg.Text != "" {
+			a.tasks = append(a.tasks, taskItem{text: msg.Text, done: false})
+			a.logAction("Task added: " + msg.Text)
+			a.statusMsg = "Task added"
+		}
+		return a, nil
+
+	case TaskToggleRequested:
+		if msg.Index >= 0 && msg.Index < len(a.tasks) {
+			a.tasks[msg.Index].done = !a.tasks[msg.Index].done
+			status := "done"
+			if !a.tasks[msg.Index].done {
+				status = "pending"
+			}
+			a.logAction("Task " + status + ": " + a.tasks[msg.Index].text)
+		}
+		return a, nil
+
+	case TaskListRequested:
+		if len(a.tasks) == 0 {
+			a.appendToViewport("No tasks. Use /task <description> to add one.")
+		} else {
+			var b strings.Builder
+			b.WriteString("Tasks:\n")
+			for _, t := range a.tasks {
+				mark := " "
+				if t.done {
+					mark = "x"
+				}
+				b.WriteString(fmt.Sprintf("  [%s] %s\n", mark, t.text))
+			}
+			a.appendToViewport(b.String())
+		}
+		return a, nil
 
 	// --- Spinner tick ---
 	case spinner.TickMsg:
@@ -892,11 +1057,14 @@ func (a *Application) handleCommand(cmd string) (tea.Model, tea.Cmd) {
   /history        Show recent query history
   /skills         List tool capabilities
   /flaws          Show known issues and solutions
+  /task <desc>    Add a task to the todo list
+  /tasks          List all tasks
   /srs            Run full SRS generation pipeline (5 stages)
   /exit           Quit the application
 
 File references:
-  @filename       Reference a file in the workspace (auto-attached)`
+  @filename       Reference a file in the workspace (auto-attached)
+  Click panels with mouse to focus them`
 		a.appendToViewport(helpStyle.Render(help))
 
 	case "/model":
@@ -999,6 +1167,23 @@ File references:
 	case "/flaws":
 		return a, func() tea.Msg { return FlawsListRequested{} }
 
+	case "/task":
+		if len(parts) < 2 {
+			a.errMsg = "Usage: /task <description>"
+			return a, nil
+		}
+		return a, func() tea.Msg { return TaskAddRequested{Text: strings.Join(parts[1:], " ")} }
+
+	case "/tasks":
+		return a, func() tea.Msg { return TaskListRequested{} }
+
+	case "/jsonl":
+		if len(parts) < 2 {
+			a.errMsg = "Usage: /jsonl <file.jsonl>"
+			return a, nil
+		}
+		return a, func() tea.Msg { return JSONLIngestRequested{Path: parts[1]} }
+
 	case "/srs":
 		return a, func() tea.Msg { return SRSRequested{} }
 
@@ -1019,54 +1204,255 @@ func (a *Application) View() string {
 		return "\n  Initializing mini-wiki..."
 	}
 
-	var b strings.Builder
+	w := a.width
+	if w < 60 {
+		w = 60
+	}
+	h := a.height
+	if h < 20 {
+		h = 20
+	}
 
-	// Title bar
-	b.WriteString(titleStyle.Render(" mini-wiki "))
-	b.WriteString(modelTagStyle.Render(a.models.Active()))
-	b.WriteString("\n")
-
-	// Status line
+	// Status line text
 	statusText := a.statusMsg
 	if a.streaming {
 		statusText = fmt.Sprintf("%s %s", a.spinner.View(), statusText)
 	}
-	b.WriteString(statusStyle.Render(statusText))
-	b.WriteString("\n\n")
 
-	// Error message
+	// Error text
+	errText := ""
 	if a.errMsg != "" {
-		b.WriteString(errorStyle.Render("! " + a.errMsg))
-		b.WriteString("\n")
+		errText = "  ! " + a.errMsg
+	} else if a.pongMsg != "" {
+		errText = "  ! " + a.pongMsg
 	}
 
-	// Ping message (shown if Ollama is down)
-	if a.pongMsg != "" {
-		b.WriteString(errorStyle.Render("! " + a.pongMsg))
-		b.WriteString("\n")
+	// Project dir for header (centered)
+	projDir := ""
+	if a.pkb != nil {
+		projDir = a.pkb.ProjectDir()
 	}
-
-	// Conversation viewport
-	b.WriteString(a.viewport.View())
-	b.WriteString("\n")
-
-	// Input area
-	b.WriteString(a.input.View())
-	b.WriteString("\n")
-
-	// Suggestions / hints bar
-	if len(a.suggestions) > 0 {
-		b.WriteString(suggestionStyle.Render(formatSuggestions(a.suggestions, a.tabIndex)))
-	} else {
-		val := a.input.Value()
-		if strings.HasPrefix(val, "/") {
-			b.WriteString(hintStyle.Render("Tab to complete"))
-		} else if val == "" {
-			b.WriteString(hintStyle.Render("/help for commands"))
+	shortDir := projDir
+	if len(shortDir) > 40 {
+		parts := strings.Split(shortDir, "/")
+		if len(parts) > 3 {
+			shortDir = parts[len(parts)-3] + "/" + parts[len(parts)-2] + "/" + parts[len(parts)-1]
 		}
 	}
 
+	// --- Centered project path header ---
+	padding := (w - len(shortDir)) / 2
+	if padding < 0 {
+		padding = 0
+	}
+	headerLine := headerStyle.Render(strings.Repeat(" ", padding) + shortDir)
+
+	// --- Status sub-header with model info ---
+	subLine := ""
+	modelLine := fmt.Sprintf("active: %s  |  tokens: %d  |  loaded: %d",
+		a.models.Active(), a.estimatedTokens, len(a.models.Available()))
+	if errText != "" {
+		subLine = subHeaderStyle.Render(statusText + errText + "  |  " + modelLine)
+	} else {
+		subLine = subHeaderStyle.Render(statusText + "  |  Tokens: " + fmt.Sprintf("%d", a.estimatedTokens) + "  |  " + modelLine)
+	}
+
+	// Layout: header(2) + sub(2) + panels + overlay(0 or 1) + \n(1) + input(3) = h
+	//   panels = h - 2 - 2 - overlay - 1 - 3 = h - 8 - overlay
+	//   when no overlay: panels = h - 8
+	//   when 1-line overlay: panels = h - 9
+	overlayLines := 0
+	suggestionText := ""
+	if len(a.suggestions) > 0 {
+		overlayLines = 1
+		suggestionText = suggestionStyle.Render(formatSuggestions(a.suggestions, a.tabIndex))
+	}
+	panelH := h - 8 - overlayLines
+	if panelH < 3 {
+		panelH = 3
+	}
+
+	// Two panels: center (80%) + right (20%)
+	rightW := w * 20 / 100
+	if rightW < 18 {
+		rightW = 18
+	}
+	centerW := w - rightW
+
+	chatContent := a.renderChatPanel(centerW-2, panelH)
+	infoContent := a.renderInfoPanel(rightW)
+
+	rightSty := panelRightStyle
+	centerSty := panelCenterStyle
+
+	rightRendered := rightSty.Width(rightW).Height(panelH - 2).Render(infoContent)
+	centerRendered := centerSty.Width(centerW).Height(panelH - 2).Render(chatContent)
+
+	panelsRow := lipgloss.JoinHorizontal(lipgloss.Top, centerRendered, rightRendered)
+
+	// Input box (full width)
+	var inputRendered string
+	if a.streaming {
+		inputContent := fmt.Sprintf(" %s %s", a.spinner.View(), a.statusMsg)
+		inputRendered = inputBoxStyle.Width(w - 2).Render(inputContent)
+	} else {
+		inputLine := a.input.View()
+		if len(inputLine) > w-6 {
+			inputLine = inputLine[:w-6]
+		}
+		inputRendered = inputBoxStyle.Width(w - 2).Render(inputLine)
+	}
+
+	// Assemble
+	var b strings.Builder
+	b.WriteString(headerLine)
+	b.WriteString("\n")
+	b.WriteString(subLine)
+	b.WriteString("\n")
+	b.WriteString(panelsRow)
+	if suggestionText != "" {
+		b.WriteString("\n")
+		b.WriteString(suggestionText)
+	}
+	b.WriteString("\n")
+	b.WriteString(inputRendered)
+
 	return b.String()
+}
+
+// renderFilePanel builds the left panel content (file explorer + bookmarks).
+// renderChatPanel builds the center panel (viewport + input box).
+// welcomeLogo is shown in the chat panel before the first message.
+const welcomeLogo = ` _       _       _       _       _  
+|_ _  _ |_ _  _ |_ _  _ |_ _  _ |_ 
+  | ||_   _||_   _||_   _||_   _||  
+  _|  _|  _|  _|  _|  _|  _|  _|   
+                                    
+       mini-wiki v2.0
+  Your local AI research assistant
+                                    
+/srs  - Generate IEEE 830 SRS docs
+/scan - Index project files
+/help - All commands`
+
+func (a *Application) renderChatPanel(width, totalHeight int) string {
+	var content strings.Builder
+
+	vpHeight := totalHeight
+	if vpHeight < 3 {
+		vpHeight = 3
+	}
+
+	a.viewport.Width = width
+	a.viewport.Height = vpHeight
+
+	if a.showWelcome {
+		logoLines := strings.Split(welcomeLogo, "\n")
+		visible := logoLines
+		if len(visible) > vpHeight {
+			visible = visible[:vpHeight]
+		}
+		emptyBefore := (vpHeight - len(visible)) / 2
+		for i := 0; i < emptyBefore; i++ {
+			content.WriteString("\n")
+		}
+		for _, line := range visible {
+			padding := (width - len(line)) / 2
+			if padding < 0 {
+				padding = 0
+			}
+			content.WriteString(strings.Repeat(" ", padding))
+			content.WriteString(line)
+			content.WriteString("\n")
+		}
+	} else {
+		content.WriteString(a.viewport.View())
+		content.WriteString("\n")
+	}
+
+	return content.String()
+}
+
+// renderInfoPanel builds the right panel (session, model, tasks, history).
+func (a *Application) renderInfoPanel(width int) string {
+	var content strings.Builder
+
+	content.WriteString(panelHeaderStyle.Render("SESSION"))
+	content.WriteString("\n")
+	content.WriteString(fmt.Sprintf("  %s %s\n", infoLabelStyle.Render("M:"), infoValueStyle.Render(a.models.Active())))
+	chain := a.models.ActiveChain()
+	if len(chain) > 1 {
+		content.WriteString(fmt.Sprintf("  %s %s\n", infoLabelStyle.Render("F:"), infoValueStyle.Render(chain[1])))
+	}
+	ctxPct := "0%"
+	if a.thread != nil && a.thread.MaxTokens > 0 {
+		pct := a.thread.EstimatedTokens() * 100 / a.thread.MaxTokens
+		ctxPct = fmt.Sprintf("%d%%", pct)
+	}
+	content.WriteString(fmt.Sprintf("  %s %s\n", infoLabelStyle.Render("Ctx:"), infoValueStyle.Render(ctxPct)))
+	content.WriteString(fmt.Sprintf("  %s %s\n", infoLabelStyle.Render("Tok:"), infoValueStyle.Render(fmt.Sprintf("%d", a.estimatedTokens))))
+
+	content.WriteString("\n")
+	content.WriteString(panelHeaderStyle.Render("TASKS"))
+	content.WriteString("\n")
+	if len(a.tasks) == 0 {
+		content.WriteString("  none\n")
+	} else {
+		maxShow := 4
+		for i, t := range a.tasks {
+			if i >= maxShow {
+				break
+			}
+			mark := " "
+			if t.done {
+				mark = "x"
+			}
+			label := t.text
+			if len(label) > width-6 {
+				label = label[:width-9] + "..."
+			}
+			content.WriteString(fmt.Sprintf("  [%s] %s\n", mark, label))
+		}
+	}
+
+	content.WriteString("\n")
+	content.WriteString(panelHeaderStyle.Render("HX"))
+	content.WriteString("\n")
+	if len(a.actionHistory) == 0 {
+		content.WriteString("  none\n")
+	} else {
+		maxShow := 4
+		start := 0
+		if len(a.actionHistory) > maxShow {
+			start = len(a.actionHistory) - maxShow
+		}
+		for _, act := range a.actionHistory[start:] {
+			label := act
+			if len(label) > width-4 {
+				label = label[:width-7] + "..."
+			}
+			content.WriteString(fmt.Sprintf("  %s\n", label))
+		}
+	}
+
+	return content.String()
+}
+
+// shortName shortens a path for display within maxLen.
+func shortName(path string, maxLen int) string {
+	if len(path) <= maxLen {
+		return path
+	}
+	// Try to show last segments
+	parts := strings.Split(path, "/")
+	if len(parts) <= 3 {
+		return "..." + path[len(path)-maxLen+3:]
+	}
+	short := strings.Join(parts[len(parts)-3:], "/")
+	if len(short) <= maxLen {
+		return ".../" + short
+	}
+	return "..." + short[len(short)-maxLen+3:]
 }
 
 // --- View helpers ---
@@ -1401,11 +1787,31 @@ func truncateText(s string, maxLen int) string {
 
 // --- Command auto-completion ---
 
-var availableCommands = []string{
-	"/help", "/model", "/models", "/refresh", "/clear", "/system",
-	"/scan", "/files", "/ingest", "/fetch", "/export",
-	"/kbstatus", "/kbquery", "/bookmark", "/bookmarks",
-	"/history", "/skills", "/flaws", "/srs", "/exit",
+// commandList defines all available commands with descriptions for auto-complete hints.
+var commandList = []suggestionItem{
+	{text: "/help", description: "Show this help message", category: "cmd"},
+	{text: "/model", description: "Switch the active LLM model", category: "cmd"},
+	{text: "/models", description: "List all available models", category: "cmd"},
+	{text: "/refresh", description: "Reload model list from Ollama", category: "cmd"},
+	{text: "/clear", description: "Clear conversation history", category: "cmd"},
+	{text: "/system", description: "Set a new system prompt", category: "cmd"},
+	{text: "/scan", description: "Scan workspace for files", category: "cmd"},
+	{text: "/files", description: "List scanned files", category: "cmd"},
+	{text: "/ingest", description: "Read a file into context", category: "cmd"},
+	{text: "/jsonl", description: "Ingest a JSONL dataset", category: "cmd"},
+	{text: "/fetch", description: "Fetch a webpage and extract text", category: "cmd"},
+	{text: "/export", description: "Export conversation to .xlsx", category: "cmd"},
+	{text: "/kbstatus", description: "Show knowledge base stats", category: "cmd"},
+	{text: "/kbquery", description: "Search the knowledge base", category: "cmd"},
+	{text: "/bookmark", description: "Save current finding", category: "cmd"},
+	{text: "/bookmarks", description: "List saved bookmarks", category: "cmd"},
+	{text: "/history", description: "Show recent query history", category: "cmd"},
+	{text: "/skills", description: "List tool capabilities", category: "cmd"},
+	{text: "/flaws", description: "Show known issues and solutions", category: "cmd"},
+	{text: "/task", description: "Add a todo task", category: "cmd"},
+	{text: "/tasks", description: "List all tasks", category: "cmd"},
+	{text: "/srs", description: "Run SRS generation pipeline", category: "cmd"},
+	{text: "/exit", description: "Quit the application", category: "cmd"},
 }
 
 func (a *Application) updateSuggestions() {
@@ -1413,25 +1819,115 @@ func (a *Application) updateSuggestions() {
 	a.suggestions = nil
 	a.tabIndex = -1
 
-	if !strings.HasPrefix(val, "/") {
+	// 1. If typing /, suggest commands
+	if strings.HasPrefix(val, "/") {
+		for _, cmd := range commandList {
+			if strings.HasPrefix(cmd.text, val) {
+				a.suggestions = append(a.suggestions, cmd)
+			}
+		}
 		return
 	}
 
-	for _, cmd := range availableCommands {
-		if strings.HasPrefix(cmd, val) {
-			a.suggestions = append(a.suggestions, cmd)
+	// 2. If typing @ or a partial path, suggest files from the scanned index
+	if strings.Contains(val, "@") || strings.HasPrefix(val, ".") || strings.HasPrefix(val, "/") {
+		// If no scan has been done, show a helpful hint
+		if a.fileIndex == nil {
+			a.suggestions = append(a.suggestions, suggestionItem{
+				text:        "/scan",
+				description: "Run /scan first to index files for completion",
+				category:    "cmd",
+			})
+			return
+		}
+
+		lastToken := extractPathToken(val)
+		matched := false
+		for _, f := range a.fileIndex.Files {
+			rel, err := filepath.Rel(a.fileIndex.Root, f.Path)
+			if err != nil {
+				continue
+			}
+			if pathPrefixMatch(rel, lastToken) {
+				a.suggestions = append(a.suggestions, suggestionItem{
+					text:        "@" + rel,
+					description: fmt.Sprintf("%s (%s)", rel, humanBytes(f.Size)),
+					category:    "file",
+				})
+				matched = true
+			}
+		}
+		// If no match, show all files as a fallback (for bare @)
+		if !matched {
+			for _, f := range a.fileIndex.Files {
+				rel, _ := filepath.Rel(a.fileIndex.Root, f.Path)
+				a.suggestions = append(a.suggestions, suggestionItem{
+					text:        "@" + rel,
+					description: fmt.Sprintf("%s (%s)", rel, humanBytes(f.Size)),
+					category:    "file",
+				})
+			}
+		}
+		// Limit suggestions
+		if len(a.suggestions) > 10 {
+			a.suggestions = a.suggestions[:10]
 		}
 	}
 }
 
+// extractPathToken pulls the last @reference or path-like token from input.
+func extractPathToken(val string) string {
+	// If there's an @, get everything after the last @
+	if idx := strings.LastIndex(val, "@"); idx >= 0 {
+		return val[idx+1:]
+	}
+	// If the input starts with ., /, or looks like a file path
+	fields := strings.Fields(val)
+	if len(fields) > 0 {
+		last := fields[len(fields)-1]
+		if strings.Contains(last, ".") || strings.Contains(last, "/") || strings.HasPrefix(last, ".") || strings.HasPrefix(last, "/") {
+			return last
+		}
+	}
+	return ""
+}
+
+// pathPrefixMatch checks if a file path starts with the given prefix (supporting subdir matching).
+// For example, if prefix is "child_dir/", it matches "child_dir/file.txt" and "child_dir/sub/file.txt".
+func pathPrefixMatch(relPath, prefix string) bool {
+	if prefix == "" {
+		return false
+	}
+	// Normalize: remove leading @ if present
+	prefix = strings.TrimPrefix(prefix, "@")
+	// Direct prefix match (for @ references and full paths)
+	if strings.HasPrefix(relPath, prefix) {
+		return true
+	}
+	// If prefix is a directory name with trailing /, match anything inside
+	if strings.HasSuffix(prefix, "/") {
+		return strings.HasPrefix(relPath, prefix)
+	}
+	return false
+}
+
 func (a *Application) cycleSuggestion(val string) {
 	// Rebuild suggestions if empty or input changed
-	if len(a.suggestions) == 0 || (a.tabIndex >= 0 && a.suggestions[a.tabIndex] != val) {
-		a.suggestions = nil
-		for _, cmd := range availableCommands {
-			if strings.HasPrefix(cmd, val) {
-				a.suggestions = append(a.suggestions, cmd)
-			}
+	needsRebuild := false
+	if len(a.suggestions) == 0 {
+		needsRebuild = true
+	} else if a.tabIndex >= 0 && a.tabIndex < len(a.suggestions) {
+		if a.suggestions[a.tabIndex].text != val && !strings.HasPrefix(val, a.suggestions[a.tabIndex].text) {
+			needsRebuild = true
+		}
+	} else {
+		needsRebuild = true
+	}
+
+	if needsRebuild {
+		a.updateSuggestions()
+		if len(a.suggestions) == 0 {
+			return
 		}
 		a.tabIndex = -1
 	}
@@ -1446,9 +1942,10 @@ func (a *Application) cycleSuggestion(val string) {
 		a.tabIndex = 0
 	}
 
-	// Show the suggestion in the input (partial fill)
-	a.input.SetValue(a.suggestions[a.tabIndex] + " ")
-	a.input.SetCursor(len(a.suggestions[a.tabIndex]) + 1)
+	// Fill the input with the selected suggestion
+	selected := a.suggestions[a.tabIndex]
+	a.input.SetValue(selected.text + " ")
+	a.input.SetCursor(len(selected.text) + 1)
 }
 
 func (a *Application) clearSuggestions() {
@@ -1456,22 +1953,43 @@ func (a *Application) clearSuggestions() {
 	a.tabIndex = -1
 }
 
-func formatSuggestions(suggestions []string, selected int) string {
+func formatSuggestions(suggestions []suggestionItem, selected int) string {
 	if len(suggestions) == 0 {
 		return ""
 	}
 	var b strings.Builder
 	for i, s := range suggestions {
 		if i > 0 {
-			b.WriteString("  ")
+			b.WriteString(" | ")
 		}
+		marker := "  "
 		if i == selected {
-			b.WriteString("> " + s)
+			marker = ">"
+		}
+		if s.description != "" {
+			b.WriteString(fmt.Sprintf("%s %s - %s", marker, s.text, s.description))
 		} else {
-			b.WriteString("  " + s)
+			b.WriteString(fmt.Sprintf("%s %s", marker, s.text))
 		}
 	}
 	return b.String()
+}
+
+// logAction records an action in the history ring buffer (max 20).
+func (a *Application) logAction(action string) {
+	a.actionHistory = append(a.actionHistory, action)
+	if len(a.actionHistory) > 20 {
+		a.actionHistory = a.actionHistory[len(a.actionHistory)-20:]
+	}
+}
+
+// updateTokenCount estimates and stores the current token count from the thread.
+func (a *Application) updateTokenCount() {
+	if a.thread == nil {
+		a.estimatedTokens = 0
+		return
+	}
+	a.estimatedTokens = a.thread.EstimatedTokens()
 }
 
 // registerBuiltinSkills registers the tool's built-in capabilities in tool memory.
@@ -1528,6 +2046,45 @@ func srsPipelineCmd(pipeline *srs.Pipeline, data string) tea.Cmd {
 		return SRSComplete{
 			Content: results.SRS,
 			RunID:   string(results.RunID),
+		}
+	}
+}
+
+func jsonlIngestCmd(parser jsonlparser.Parser, resolver fileref.Resolver, path string, cfg fileref.ResolverConfig) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		ref := fileref.Reference{Raw: "@" + path}
+		absPath, data, err := resolver.Resolve(ctx, ref, cfg)
+		if err != nil {
+			return JSONLIngestFailed{Err: err}
+		}
+
+		var rows []jsonlparser.Row
+		stats, err := parser.Parse(ctx, strings.NewReader(string(data)), 0, func(chunk jsonlparser.Chunk) error {
+			rows = append(rows, chunk.Rows...)
+			return nil
+		})
+		if err != nil {
+			return JSONLIngestFailed{Err: err}
+		}
+
+		// Build combined text from all rows (first 100)
+		var textParts []string
+		maxRows := 100
+		if len(rows) < maxRows {
+			maxRows = len(rows)
+		}
+		for _, row := range rows[:maxRows] {
+			textParts = append(textParts, row.Text)
+		}
+
+		return JSONLIngestComplete{
+			Path:   absPath,
+			Rows:   stats.TotalRows,
+			Fields: stats.Fields,
+			Text:   strings.Join(textParts, "\n---\n"),
 		}
 	}
 }

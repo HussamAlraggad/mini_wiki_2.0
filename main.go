@@ -1,9 +1,10 @@
 // mini-wiki: A standalone TUI AI Research Assistant powered by local LLMs.
 //
 // Usage:
-//   wiki                    # Run from any directory (uses CWD as research root)
-//   wiki --ollama http://... # Custom Ollama endpoint
-//   wiki --no-start         # Don't auto-start Ollama, fail if not running
+//   wiki                           # Run from any directory
+//   wiki --ollama http://...       # Custom Ollama endpoint
+//   wiki --no-start                # Don't auto-start Ollama
+//   wiki --select                 # Run inline (allows text selection with mouse)
 //
 // Commands (inside the TUI):
 //   /help          Show commands
@@ -35,6 +36,7 @@ func main() {
 	// Command-line flags
 	ollamaEndpoint := flag.String("ollama", "", "Ollama API endpoint (default: http://127.0.0.1:11434)")
 	noAutoStart := flag.Bool("no-start", false, "Don't auto-start Ollama; fail if not running")
+	inlineMode := flag.Bool("select", false, "Run inline so you can select/copy text with mouse")
 	flag.Parse()
 
 	// --- Initialize config ---
@@ -92,11 +94,13 @@ func main() {
 	appModel := app.New(cfg, client, mm)
 
 	// --- Run Bubbletea program ---
-	p := tea.NewProgram(
-		appModel,
-		tea.WithAltScreen(),       // Use alternate screen buffer
-		tea.WithMouseCellMotion(), // Enable mouse support
-	)
+	// Default: alt screen for proper full-screen TUI.
+	// Use --select for inline mode (allows mouse text selection/copy).
+	opts := []tea.ProgramOption{tea.WithAltScreen(), tea.WithMouseCellMotion()}
+	if *inlineMode {
+		opts = []tea.ProgramOption{tea.WithMouseCellMotion()}
+	}
+	p := tea.NewProgram(appModel, opts...)
 
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error running TUI: %v\n", err)
