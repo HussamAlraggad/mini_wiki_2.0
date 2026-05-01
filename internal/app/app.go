@@ -207,6 +207,10 @@ var (
 			Foreground(lipgloss.Color("#4B5563")).
 			Padding(0, 1)
 
+	bottomRightStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#6B7280")).
+			Padding(0, 1)
+
 	// Input box with subtle border
 	inputBoxStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
@@ -1247,26 +1251,30 @@ func (a *Application) View() string {
 	}
 	headerLine := headerStyle.Render(strings.Repeat(" ", padding) + shortDir)
 
-	// --- Status sub-header with model info ---
+	// --- Status sub-header ---
 	subLine := ""
-	modelLine := fmt.Sprintf("active: %s  |  tokens: %d  |  loaded: %d",
-		a.models.Active(), a.estimatedTokens, len(a.models.Available()))
 	if errText != "" {
-		subLine = subHeaderStyle.Render(statusText + errText + "  |  " + modelLine)
+		subLine = subHeaderStyle.Render(statusText + errText)
 	} else {
-		subLine = subHeaderStyle.Render(statusText + "  |  Tokens: " + fmt.Sprintf("%d", a.estimatedTokens) + "  |  " + modelLine)
+		subLine = subHeaderStyle.Render(statusText + "  |  Tokens: " + fmt.Sprintf("%d", a.estimatedTokens))
 	}
 
-	// Layout: header(2) + sub(2) + panels + overlay(0 or 1) + \n(1) + input(3) = h
-	//   panels = h - 2 - 2 - overlay - 1 - 3 = h - 8 - overlay
-	//   when no overlay: panels = h - 8
-	//   when 1-line overlay: panels = h - 9
+	// Suggestion overlay (pops up above input)
 	overlayLines := 0
 	suggestionText := ""
 	if len(a.suggestions) > 0 {
 		overlayLines = 1
 		suggestionText = suggestionStyle.Render(formatSuggestions(a.suggestions, a.tabIndex))
 	}
+
+	// Bottom bar: model info on the right
+	modelInfo := fmt.Sprintf("  active: %s  |  tokens: %d  |  loaded: %d models",
+		a.models.Active(), a.estimatedTokens, len(a.models.Available()))
+	bottomBar := bottomRightStyle.Render(modelInfo)
+
+	// Layout: header(2) + sub(2) + panels(panelH-2) + overlay(0/1) + \n(1) + input(3) + \n(1) + bar(1) = h
+	//   = 4 + panelH - 2 + overlay + 1 + 3 + 1 + 1 = panelH + 8 + overlay
+	//   panelH = h - 8 - overlayLines
 	panelH := h - 8 - overlayLines
 	if panelH < 3 {
 		panelH = 3
@@ -1316,6 +1324,8 @@ func (a *Application) View() string {
 	}
 	b.WriteString("\n")
 	b.WriteString(inputRendered)
+	b.WriteString("\n")
+	b.WriteString(bottomBar)
 
 	return b.String()
 }
