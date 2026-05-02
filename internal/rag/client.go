@@ -68,6 +68,14 @@ type Client struct {
 	stdout    *bufio.Scanner
 	mu        sync.Mutex
 	startedBy bool
+	lastError string
+}
+
+// LastError returns the last captured stderr output from the worker.
+func (c *Client) LastError() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.lastError
 }
 
 // New creates a new RAG client without starting the worker.
@@ -105,8 +113,10 @@ func (c *Client) Start(pythonPath, workerPath, wikiDir, embedModel, llmModel, ol
 		return fmt.Errorf("stdout pipe: %w", err)
 	}
 
-	// Stderr goes to our stderr for debugging
-	cmd.Stderr = nil
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("stderr pipe: %w", err)
+	}
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start worker: %w", err)
@@ -115,6 +125,14 @@ func (c *Client) Start(pythonPath, workerPath, wikiDir, embedModel, llmModel, ol
 	c.cmd = cmd
 	c.stdin = stdin
 	c.stdout = bufio.NewScanner(stdout)
+
+	// Read stderr in background and capture for error messages
+	go func() {
+		stderrData, _ := io.ReadAll(stderr)
+		if len(stderrData) > 0 {
+			c.lastError = string(stderrData)
+		}
+	}()
 
 	// Wait for "ready" signal
 	ready, err := c.readResponse()

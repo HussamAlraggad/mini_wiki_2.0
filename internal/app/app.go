@@ -2090,30 +2090,48 @@ func extractRefInfo(raw string) (path string, line, endLine int) {
 // --- RAG helpers ---
 
 // ensureRAGStarted starts the Python RAG worker if not already running.
-// Returns true if the worker is available.
-func (a *Application) ensureRAGStarted() bool {
+// Returns error string if unavailable (empty string means ready).
+func (a *Application) ensureRAGStarted() string {
 	if a.ragDir == "" {
-		return false
+		return "RAG worker files not extracted"
 	}
 	if a.ragClient.IsRunning() {
-		return true
+		return ""
 	}
 	workerPath := filepath.Join(a.ragDir, "main.py")
 	if _, err := os.Stat(workerPath); err != nil {
-		return false
+		return fmt.Sprintf("RAG worker not found at %s", workerPath)
 	}
-	if err := a.ragClient.Start("python3", workerPath, a.pkb.ProjectDir(), "nomic-embed-text", a.models.Active(), "http://127.0.0.1:11434"); err != nil {
-		// Try "python" instead of "python3"
-		if err2 := a.ragClient.Start("python", workerPath, a.pkb.ProjectDir(), "nomic-embed-text", a.models.Active(), "http://127.0.0.1:11434"); err2 != nil {
-			return false
+	var lastErr error
+	for _, python := range []string{"python3", "python"} {
+		if err := a.ragClient.Start(python, workerPath, a.pkb.ProjectDir(), "nomic-embed-text", a.models.Active(), "http://127.0.0.1:11434"); err != nil {
+			lastErr = err
+			continue
+		}
+		return ""
+	}
+	// Get detailed error from stderr if available
+	if errMsg := a.ragClient.LastError(); errMsg != "" {
+		// Extract the most useful part of the error
+		lines := strings.Split(errMsg, "\n")
+		for _, line := range lines {
+			if strings.Contains(line, "ModuleNotFoundError") || strings.Contains(line, "Error") {
+				return fmt.Sprintf("Python error: %s", strings.TrimSpace(line))
+			}
+		}
+		if len(lines) > 0 {
+			return fmt.Sprintf("Python: %s", strings.TrimSpace(lines[len(lines)-1]))
 		}
 	}
-	return true
+	if lastErr != nil {
+		return fmt.Sprintf("RAG worker: %v", lastErr)
+	}
+	return "RAG worker failed to start (unknown error)"
 }
 
 // queryRAG queries the RAG worker for relevant context, returning sources and answer.
 func (a *Application) queryRAG(question string, topK int) (*rag.QueryResult, error) {
-	if !a.ensureRAGStarted() {
+	if errMsg := a.ensureRAGStarted(); errMsg != "" {
 		return nil, nil // RAG not available, silently skip
 	}
 	return a.ragClient.Query(question, topK)
@@ -2130,8 +2148,8 @@ func ingestRAGCmd(a *Application, path string) tea.Cmd {
 		if err != nil {
 			return RAGDone{Path: path, Error: err.Error()}
 		}
-		if !a.ensureRAGStarted() {
-			return RAGDone{Path: path, Error: "RAG worker not available (is Python installed?)"}
+		if errMsg := a.ensureRAGStarted(); errMsg != "" {
+			return RAGDone{Path: path, Error: errMsg}
 		}
 		result, err := a.ragClient.Ingest(absPath, "nomic-embed-text")
 		if err != nil {
