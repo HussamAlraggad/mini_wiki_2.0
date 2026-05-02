@@ -95,11 +95,12 @@ def get_text_content(path: str) -> Optional[str]:
 class IngestionResult:
     """Result of an ingestion operation."""
 
-    def __init__(self, path: str, chunks: int = 0, error: str = None, total_chunks: int = 0):
+    def __init__(self, path: str, chunks: int = 0, error: str = None, total_chunks: int = 0, progress: list = None):
         self.path = path
         self.chunks = chunks
         self.error = error
         self.total_chunks = total_chunks
+        self.progress = progress or []
 
 
 def ingest_file(
@@ -124,30 +125,37 @@ def ingest_file(
     Returns:
         IngestionResult with status
     """
+    progress = []
+
     try:
         file_size = get_file_size(path)
         ext = os.path.splitext(path)[1].lower()
 
+        progress.append(f"Reading {os.path.basename(path)} ({file_size / 1024:.0f} KB)...")
         # For JSONL/CSV files: process line-by-line to save memory
         if ext in (".jsonl", ".ndjson", ".csv", ".tsv") and file_size > LARGE_FILE_WARN:
-            return ingest_large_text_file(path, embedder, vector_db, chunk_size, overlap)
+            result = ingest_large_text_file(path, embedder, vector_db, chunk_size, overlap)
+            result.progress = progress + result.progress
+            return result
 
         text = get_text_content(path)
         if text is None:
-            return IngestionResult(path=path, error="Could not extract text from file")
+            return IngestionResult(path=path, error="Could not extract text from file", progress=progress)
 
         text = text.strip()
         if not text:
-            return IngestionResult(path=path, error="File is empty")
+            return IngestionResult(path=path, error="File is empty", progress=progress)
 
-        return _chunk_and_embed(path, text, embedder, vector_db, chunk_size, overlap)
+        result = _chunk_and_embed(path, text, embedder, vector_db, chunk_size, overlap)
+        result.progress = progress + result.progress
+        return result
 
     except MemoryError:
         logger.exception("Out of memory during ingestion")
-        return IngestionResult(path=path, error="Out of memory. Try a smaller file or free up RAM.")
+        return IngestionResult(path=path, error="Out of memory. Try a smaller file or free up RAM.", progress=progress)
     except Exception as e:
         logger.exception(f"Error ingesting {path}")
-        return IngestionResult(path=path, error=str(e))
+        return IngestionResult(path=path, error=str(e), progress=progress)
 
 
 def ingest_large_text_file(
@@ -213,16 +221,20 @@ def _chunk_and_embed(
     overlap: int,
 ) -> IngestionResult:
     """Chunk text, embed in batches, store in vector DB."""
+    progress = []
+    progress.append(f"Chunking {len(text)} characters...")
     chunks = chunk_text(text, chunk_size=chunk_size, overlap=overlap)
     if not chunks:
-        return IngestionResult(path=path, error="No chunks generated")
+        return IngestionResult(path=path, error="No chunks generated", progress=progress)
 
-    logger.info(f"  Generated {len(chunks)} chunks")
+    progress.append(f"Generated {len(chunks)} chunks")
+    progress.append(f"Embedding {len(chunks)} chunks...")
 
     n = _embed_and_store(path, os.path.basename(path), chunks, embedder, vector_db)
     total_in_db = vector_db.count()
 
-    return IngestionResult(path=path, chunks=n, total_chunks=total_in_db)
+    progress.append(f"Stored {n} chunks in database")
+    return IngestionResult(path=path, chunks=n, total_chunks=total_in_db, progress=progress)
 
 
 def _embed_and_store(
@@ -244,8 +256,9 @@ def _embed_and_store(
             continue
 
         all_embeddings.extend(batch_embeddings)
-        logger.info(f"  Embedded {min(i + BATCH_SIZE, len(chunks))}/{len(chunks)} chunks")
-        total_embedded = min(i + BATCH_SIZE, len(chunks))
+        done = min(i + BATCH_SIZE, len(chunks))
+        logger.info(f"  Embedded {done}/{len(chunks)} chunks")
+        total_embedded = done
 
     if not all_embeddings:
         return 0

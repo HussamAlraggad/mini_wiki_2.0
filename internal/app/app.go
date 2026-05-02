@@ -77,9 +77,10 @@ type (
 		Err  error
 	}
 	RAGDone struct {
-		Path   string
-		Chunks int
-		Error  string
+		Path     string
+		Chunks   int
+		Error    string
+		Progress []string
 	}
 
 	// Phase 3: Web fetching
@@ -576,11 +577,16 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, ingestRAGCmd(a, path)
 
 	case RAGDone:
+		if len(msg.Progress) > 0 {
+			for _, p := range msg.Progress {
+				a.appendToViewport(fmt.Sprintf("  [RAG] %s", p))
+			}
+		}
 		if msg.Error != "" {
-			a.appendToViewport(fmt.Sprintf("[RAG error: %s]", msg.Error))
+			a.appendToViewport(fmt.Sprintf("[RAG error] %s", msg.Error))
 			a.statusMsg = "RAG error"
 		} else {
-			a.appendToViewport(fmt.Sprintf("[RAG done: %s - %d chunks indexed]", filepath.Base(msg.Path), msg.Chunks))
+			a.appendToViewport(fmt.Sprintf("[RAG done] %s - %d chunks indexed", filepath.Base(msg.Path), msg.Chunks))
 			a.statusMsg = fmt.Sprintf("Indexed %d chunks", msg.Chunks)
 		}
 		return a, nil
@@ -2169,16 +2175,22 @@ func ingestRAGCmd(a *Application, path string) tea.Cmd {
 		}
 		result, err := a.ragClient.Ingest(absPath, "nomic-embed-text")
 		if err != nil {
-			return RAGDone{Path: path, Error: err.Error()}
+			prog := []string{}
+			if result != nil {
+				prog = result.Progress
+			}
+			return RAGDone{Path: path, Error: err.Error(), Progress: prog}
 		}
 		if result != nil && result.Error != "" {
-			return RAGDone{Path: path, Error: result.Error}
+			return RAGDone{Path: path, Error: result.Error, Progress: result.Progress}
 		}
 		chunks := 0
+		progress := []string{}
 		if result != nil {
 			chunks = result.Chunks
+			progress = result.Progress
 		}
-		return RAGDone{Path: absPath, Chunks: chunks}
+		return RAGDone{Path: absPath, Chunks: chunks, Progress: progress}
 	}
 }
 

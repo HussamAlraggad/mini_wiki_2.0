@@ -53,6 +53,7 @@ type IngestResult struct {
 	Chunks      int
 	TotalChunks int
 	Error       string
+	Progress    []string // progress messages from the worker
 }
 
 // QueryResult holds the result of a RAG query.
@@ -151,6 +152,7 @@ func (c *Client) Start(pythonPath, workerPath, wikiDir, embedModel, llmModel, ol
 }
 
 // Ingest sends a file path to the RAG worker for indexing.
+// Reads progress messages until done/error.
 func (c *Client) Ingest(path string, embedModel string) (*IngestResult, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -160,40 +162,49 @@ func (c *Client) Ingest(path string, embedModel string) (*IngestResult, error) {
 		return nil, err
 	}
 
-	// Read response with timeout via goroutine
-	type respResult struct {
-		resp *Response
-		err  error
-	}
-	resultCh := make(chan respResult, 1)
-	go func() {
-		resp, err := c.readResponse()
-		resultCh <- respResult{resp, err}
-	}()
+	result := &IngestResult{Path: path}
 
-	select {
-	case result := <-resultCh:
-		if result.err != nil {
-			// Check if there's a captured stderr error with more detail
-			if c.lastError != "" {
-				return nil, fmt.Errorf("worker error: %s", c.lastError)
+	// Read responses until done/error, collecting progress
+	timeout := time.After(10 * time.Minute)
+	for {
+		// Read with timeout
+		type respResult struct {
+			resp *Response
+			err  error
+		}
+		resultCh := make(chan respResult, 1)
+		go func() {
+			resp, err := c.readResponse()
+			resultCh <- respResult{resp, err}
+		}()
+
+		select {
+		case r := <-resultCh:
+			if r.err != nil {
+				if c.lastError != "" {
+					return result, fmt.Errorf("worker: %s", c.lastError)
+				}
+				return result, r.err
 			}
-			return nil, result.err
+			resp := r.resp
+
+			switch resp.Type {
+			case "progress":
+				result.Progress = append(result.Progress, resp.Message)
+				continue // read next response
+			case "error":
+				result.Error = resp.Message
+				return result, nil
+			case "done":
+				result.Chunks = resp.Chunks
+				result.TotalChunks = resp.TotalChunks
+				return result, nil
+			default:
+				return result, fmt.Errorf("unexpected response: %s", resp.Type)
+			}
+		case <-timeout:
+			return result, fmt.Errorf("ingest timed out after 10 minutes")
 		}
-		resp := result.resp
-		if resp.Type == "error" {
-			return &IngestResult{Path: path, Error: resp.Message}, nil
-		}
-		if resp.Type != "done" {
-			return nil, fmt.Errorf("unexpected response: %s", resp.Type)
-		}
-		return &IngestResult{
-			Path:        resp.Path,
-			Chunks:      resp.Chunks,
-			TotalChunks: resp.TotalChunks,
-		}, nil
-	case <-time.After(5 * time.Minute):
-		return nil, fmt.Errorf("ingest timed out after 5 minutes")
 	}
 }
 

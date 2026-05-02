@@ -92,6 +92,10 @@ def main():
                     current_embedder = Embedder(model=cmd["embed_model"], base_url=ollama_url)
 
                 result = ingest_file(path, current_embedder, vector_db, chunk_size, overlap)
+                # Send progress messages during ingestion
+                if result.progress:
+                    for p in result.progress:
+                        send_response({"type": "progress", "message": p})
                 if result.error:
                     send_response({"type": "error", "message": result.error})
                 else:
