@@ -1756,7 +1756,13 @@ func (a *Application) updateSuggestions() {
 	a.suggestions = nil
 	a.tabIndex = -1
 
-	// 1. If typing /, suggest commands
+	// If input has @, do file completion (handles both bare @ and /cmd @path)
+	if strings.Contains(val, "@") {
+		a.suggestAtFiles(val)
+		return
+	}
+
+	// If typing /, suggest commands
 	if strings.HasPrefix(val, "/") {
 		for _, cmd := range commandList {
 			if strings.HasPrefix(cmd.text, val) {
@@ -1766,8 +1772,8 @@ func (a *Application) updateSuggestions() {
 		return
 	}
 
-	// 2. If typing @, suggest files from the filesystem directly (like ls)
-	if strings.Contains(val, "@") || strings.HasPrefix(val, ".") || strings.HasPrefix(val, "/") {
+	// If typing a path-like string, do file completion
+	if strings.HasPrefix(val, ".") || strings.HasPrefix(val, "/") {
 		a.suggestAtFiles(val)
 	}
 }
