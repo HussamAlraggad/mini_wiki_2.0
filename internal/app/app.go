@@ -285,6 +285,7 @@ type Application struct {
 	// Layout state
 	estimatedTokens int
 	showWelcome    bool // show welcome logo when chat is empty
+	busy           bool // true when a background operation is running
 
 	// Tasks / todo
 	tasks         []taskItem
@@ -446,6 +447,9 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.viewport.SetContent("")
 		}
 
+		// Clear input for any message type
+		a.input.SetValue("")
+
 		// Handle slash commands
 		if strings.HasPrefix(content, "/") {
 			return a.handleCommand(content)
@@ -542,11 +546,13 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// --- File scanning ---
 	case ScanRequested:
+		a.busy = true
 		a.statusMsg = "Scanning files..."
 		a.errMsg = ""
 		return a, scanCmd(a.scanner, a.scanCfg)
 
 	case ScanComplete:
+		a.busy = false
 		a.fileIndex = msg.Result
 		summary := fmt.Sprintf("Scanned: %d files, %d dirs, %s total in %s",
 			len(msg.Result.Files), msg.Result.Dirs, humanBytes(msg.Result.Total), msg.Result.Elapsed.Round(time.Millisecond))
@@ -558,6 +564,7 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case ScanFailed:
+		a.busy = false
 		a.errMsg = fmt.Sprintf("Scan failed: %v", msg.Err)
 		return a, nil
 
@@ -571,12 +578,14 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// --- File ingestion ---
 	case IngestRequested:
+		a.busy = true
 		path := msg.Path
 		a.statusMsg = fmt.Sprintf("Indexing %s...", filepath.Base(path))
 		a.appendToViewport(fmt.Sprintf("[Indexing %s with RAG worker - waiting for response]", filepath.Base(path)))
 		return a, ingestRAGCmd(a, path)
 
 	case RAGDone:
+		a.busy = false
 		if len(msg.Progress) > 0 {
 			for _, p := range msg.Progress {
 				a.appendToViewport(fmt.Sprintf("  [RAG] %s", p))
@@ -1008,12 +1017,9 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// --- Spinner tick ---
 	case spinner.TickMsg:
-		if a.streaming {
-			var cmd tea.Cmd
-			a.spinner, cmd = a.spinner.Update(msg)
-			return a, cmd
-		}
-		return a, nil
+		var cmd tea.Cmd
+		a.spinner, cmd = a.spinner.Update(msg)
+		return a, cmd
 
 	// --- Window focus changes ---
 	case tea.FocusMsg:
@@ -1200,9 +1206,9 @@ func (a *Application) View() string {
 		h = 20
 	}
 
-	// Status line text
+	// Status line text with spinner
 	statusText := a.statusMsg
-	if a.streaming {
+	if a.streaming || a.busy {
 		statusText = fmt.Sprintf("%s %s", a.spinner.View(), statusText)
 	}
 
