@@ -76,6 +76,11 @@ type (
 		Path string
 		Err  error
 	}
+	RAGDone struct {
+		Path   string
+		Chunks int
+		Error  string
+	}
 
 	// Phase 3: Web fetching
 	FetchRequested  struct{ URL string }
@@ -390,7 +395,10 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.viewport.Style = lipgloss.NewStyle().Padding(1)
 			a.input.Width = msg.Width - 4
 			a.ready = true
-			return a, refreshModelsCmd(a.client, a.models)
+			return a, tea.Batch(
+				refreshModelsCmd(a.client, a.models),
+				scanCmd(a.scanner, a.scanCfg),
+			)
 		}
 
 		a.viewport.Width = msg.Width - 2
@@ -442,14 +450,15 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a.handleCommand(content)
 		}
 
-		// Auto-resolve @file references (if we have a file index)
-		if a.fileIndex != nil {
-			refs := a.fileref.FindRefs(content)
-			if len(refs) > 0 {
-				if len(refs) > a.refCfg.MaxRefs {
-					a.errMsg = fmt.Sprintf("Too many file references (%d, max %d)", len(refs), a.refCfg.MaxRefs)
-					return a, nil
-				}
+		// Auto-resolve @file references (works even without /scan)
+		refs := a.fileref.FindRefs(content)
+		if len(refs) > 0 {
+			if len(refs) > a.refCfg.MaxRefs {
+				a.errMsg = fmt.Sprintf("Too many file references (%d, max %d)", len(refs), a.refCfg.MaxRefs)
+				return a, nil
+			}
+			// If we have a file index, use it for resolution
+			if a.fileIndex != nil {
 				result, err := a.fileref.ResolveAll(context.Background(), content, a.fileIndex, a.refCfg)
 				if err != nil {
 					a.errMsg = fmt.Sprintf("Ref resolution error: %v", err)
@@ -460,8 +469,11 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				if result.TotalSize > 0 {
 					content = a.fileref.Inject(content, result)
-					a.appendToViewport(helpStyle.Render(fmt.Sprintf("Attached %d files (%d bytes)", len(result.Contents), result.TotalSize)))
+					a.appendToViewport(fmt.Sprintf("Attached %d files (%d bytes)", len(result.Contents), result.TotalSize))
 				}
+			} else {
+				// No file index: resolve @ refs by checking the filesystem directly
+				a.resolveAtRefsDirect(&content, refs)
 			}
 		}
 
@@ -560,19 +572,17 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case IngestRequested:
 		path := msg.Path
 		a.statusMsg = fmt.Sprintf("Indexing %s...", filepath.Base(path))
-		a.appendToViewport(fmt.Sprintf("[Indexing %s with RAG worker]", filepath.Base(path)))
-		// Resolve the absolute path first (in goroutine, non-blocking)
-		go func() {
-			rootDir := a.scanCfg.RootDir
-			if rootDir == "" {
-				rootDir, _ = os.Getwd()
-			}
-			absPath, err := fileref.SafeResolve(rootDir, path)
-			if err != nil {
-				return
-			}
-			a.ingestRAG(absPath)
-		}()
+		a.appendToViewport(fmt.Sprintf("[Indexing %s with RAG worker - waiting for response]", filepath.Base(path)))
+		return a, ingestRAGCmd(a, path)
+
+	case RAGDone:
+		if msg.Error != "" {
+			a.appendToViewport(fmt.Sprintf("[RAG error: %s]", msg.Error))
+			a.statusMsg = "RAG error"
+		} else {
+			a.appendToViewport(fmt.Sprintf("[RAG done: %s - %d chunks indexed]", filepath.Base(msg.Path), msg.Chunks))
+			a.statusMsg = fmt.Sprintf("Indexed %d chunks", msg.Chunks)
+		}
 		return a, nil
 
 	case IngestFailed:
@@ -1984,6 +1994,54 @@ func srsPipelineCmd(pipeline *srs.Pipeline, data string) tea.Cmd {
 	}
 }
 
+// resolveAtRefsDirect resolves @file references by checking the filesystem directly
+// (used when no file index is available, i.e. before /scan).
+func (a *Application) resolveAtRefsDirect(content *string, refs []fileref.Reference) {
+	rootDir := a.scanCfg.RootDir
+	if rootDir == "" {
+		return
+	}
+	var attached []string
+	for _, ref := range refs {
+		pathOnly, _, _ := extractRefInfo(ref.Raw)
+		absPath, err := fileref.SafeResolve(rootDir, pathOnly)
+		if err != nil {
+			continue
+		}
+		// Check if it's a text file (basic check: no null bytes in first 512 bytes)
+		data, err := os.ReadFile(absPath)
+		if err != nil || len(data) == 0 {
+			continue
+		}
+		if len(data) > 10*1024*1024 {
+			a.appendToViewport(fmt.Sprintf("[%s too large (%d MB), showing first 10MB]", pathOnly, len(data)/(1024*1024)))
+			data = data[:10*1024*1024]
+		}
+		*content = *content + "\n\n```" + pathOnly + "\n" + string(data) + "\n```"
+		attached = append(attached, pathOnly)
+	}
+	if len(attached) > 0 {
+		a.appendToViewport(fmt.Sprintf("Attached %d files", len(attached)))
+	}
+}
+
+// extractRefInfo is a local copy of fileref's internal function to extract path from @ref.
+func extractRefInfo(raw string) (path string, line, endLine int) {
+	path = strings.TrimPrefix(raw, "@")
+	if colonIdx := strings.LastIndex(path, ":"); colonIdx > 0 {
+		rest := path[colonIdx+1:]
+		if n, err := fmt.Sscanf(rest, "%d-%d", &line, &endLine); err == nil && n >= 1 {
+			path = path[:colonIdx]
+		} else if n, err := fmt.Sscanf(rest, "%d", &line); err == nil && n == 1 {
+			path = path[:colonIdx]
+		}
+		if endLine == 0 {
+			endLine = line
+		}
+	}
+	return path, line, endLine
+}
+
 // --- RAG helpers ---
 
 // ensureRAGStarted starts the Python RAG worker if not already running.
@@ -2016,24 +2074,33 @@ func (a *Application) queryRAG(question string, topK int) (*rag.QueryResult, err
 	return a.ragClient.Query(question, topK)
 }
 
-// ingestRAG sends a file to the RAG worker for indexing.
-func (a *Application) ingestRAG(path string) {
-	if !a.ensureRAGStarted() {
-		return
-	}
-	// Non-blocking: run in a goroutine
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-		defer cancel()
-		result, err := a.ragClient.Ingest(path, "nomic-embed-text")
-		if err != nil && a.ragDir != "" {
-			a.statusMsg = fmt.Sprintf("RAG ingest error: %v", err)
+// ingestRAGCmd returns a command that sends a file to the RAG worker and returns a RAGDone message.
+func ingestRAGCmd(a *Application, path string) tea.Cmd {
+	return func() tea.Msg {
+		rootDir := a.scanCfg.RootDir
+		if rootDir == "" {
+			rootDir, _ = os.Getwd()
+		}
+		absPath, err := fileref.SafeResolve(rootDir, path)
+		if err != nil {
+			return RAGDone{Path: path, Error: err.Error()}
+		}
+		if !a.ensureRAGStarted() {
+			return RAGDone{Path: path, Error: "RAG worker not available (is Python installed?)"}
+		}
+		result, err := a.ragClient.Ingest(absPath, "nomic-embed-text")
+		if err != nil {
+			return RAGDone{Path: path, Error: err.Error()}
 		}
 		if result != nil && result.Error != "" {
-			a.statusMsg = fmt.Sprintf("RAG ingest: %s", result.Error)
+			return RAGDone{Path: path, Error: result.Error}
 		}
-		_ = ctx
-	}()
+		chunks := 0
+		if result != nil {
+			chunks = result.Chunks
+		}
+		return RAGDone{Path: absPath, Chunks: chunks}
+	}
 }
 
 // Update the skills to mark SRS skills as implemented.
