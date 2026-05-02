@@ -1100,7 +1100,8 @@ Memory & RAG:
 			a.errMsg = "Usage: /ingest <filepath>"
 			return a, nil
 		}
-		return a, func() tea.Msg { return IngestRequested{Path: parts[1]} }
+		path := strings.TrimPrefix(parts[1], "@")
+		return a, func() tea.Msg { return IngestRequested{Path: path} }
 
 	case "/fetch":
 		if len(parts) < 2 {
@@ -1545,6 +1546,8 @@ func scanCmd(scanner filescanner.Scanner, cfg filescanner.ScannerConfig) tea.Cmd
 	}
 }
 
+const maxDisplaySize = 10 * 1024 * 1024 // 10MB max to display in chat
+
 func ingestCmd(r fileref.Resolver, path string, cfg fileref.ResolverConfig) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -1555,7 +1558,16 @@ func ingestCmd(r fileref.Resolver, path string, cfg fileref.ResolverConfig) tea.
 		if err != nil {
 			return IngestFailed{Path: path, Err: err}
 		}
-		return IngestComplete{Path: absPath, Content: string(data), Size: int64(len(data))}
+
+		size := int64(len(data))
+		content := string(data)
+
+		// If file is huge, truncate what we display in chat but keep the full path for RAG
+		if size > maxDisplaySize {
+			content = content[:maxDisplaySize] + "\n\n... [file truncated for display, full file sent to RAG worker]"
+		}
+
+		return IngestComplete{Path: absPath, Content: content, Size: size}
 	}
 }
 
@@ -1787,7 +1799,9 @@ func (a *Application) updateSuggestions() {
 			if err != nil {
 				continue
 			}
-			if pathPrefixMatch(rel, lastToken) {
+			baseName := filepath.Base(rel)
+			// Match against full path OR just the filename
+			if pathPrefixMatch(rel, lastToken) || strings.Contains(strings.ToLower(baseName), strings.ToLower(lastToken)) {
 				a.suggestions = append(a.suggestions, suggestionItem{
 					text:        "@" + rel,
 					description: fmt.Sprintf("%s (%s)", rel, humanBytes(f.Size)),

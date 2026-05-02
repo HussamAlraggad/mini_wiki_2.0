@@ -192,7 +192,13 @@ func (r *resolver) Resolve(ctx context.Context, ref Reference, cfg ResolverConfi
 		return "", nil, wiki.New(wiki.KindBinaryFile, fmt.Sprintf("binary file not allowed: %s", absPath))
 	}
 
-	// Read content
+	// Read content (safety limit: 100MB to prevent OOM)
+	const maxResolveSize = 100 * 1024 * 1024
+	info, err := f.Stat()
+	if err == nil && info.Size() > maxResolveSize {
+		return absPath, nil, wiki.New(wiki.KindFileTooLarge,
+			fmt.Sprintf("file too large for in-memory display: %d MB (max 100 MB). Use /ingest to send it directly to the RAG worker.", info.Size()/(1024*1024)))
+	}
 	data, err := os.ReadFile(absPath)
 	if err != nil {
 		return "", nil, wiki.Wrap(wiki.KindFileSystem, "read file", err)
