@@ -1159,6 +1159,15 @@ Memory & RAG:
 	case "/srs":
 		return a, func() tea.Msg { return SRSRequested{} }
 
+	case "/cancel":
+		a.statusMsg = "Cancelling..."
+		if a.ragClient != nil && a.ragClient.IsRunning() {
+			a.ragClient.Stop()
+			a.appendToViewport("[RAG operation cancelled]")
+		}
+		a.statusMsg = "Cancelled"
+		return a, nil
+
 	case "/exit":
 		return a, tea.Quit
 
@@ -1748,6 +1757,7 @@ var commandList = []suggestionItem{
 	{text: "/task", description: "Add a todo task", category: "cmd"},
 	{text: "/tasks", description: "List all tasks", category: "cmd"},
 	{text: "/srs", description: "Run SRS generation pipeline", category: "cmd"},
+	{text: "/cancel", description: "Cancel current RAG operation", category: "cmd"},
 	{text: "/exit", description: "Quit the application", category: "cmd"},
 }
 

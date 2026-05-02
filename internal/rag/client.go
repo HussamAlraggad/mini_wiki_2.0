@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Message types sent to the Python worker via stdin.
@@ -159,24 +160,41 @@ func (c *Client) Ingest(path string, embedModel string) (*IngestResult, error) {
 		return nil, err
 	}
 
-	resp, err := c.readResponse()
-	if err != nil {
-		return nil, err
+	// Read response with timeout via goroutine
+	type respResult struct {
+		resp *Response
+		err  error
 	}
+	resultCh := make(chan respResult, 1)
+	go func() {
+		resp, err := c.readResponse()
+		resultCh <- respResult{resp, err}
+	}()
 
-	if resp.Type == "error" {
-		return &IngestResult{Path: path, Error: resp.Message}, nil
+	select {
+	case result := <-resultCh:
+		if result.err != nil {
+			// Check if there's a captured stderr error with more detail
+			if c.lastError != "" {
+				return nil, fmt.Errorf("worker error: %s", c.lastError)
+			}
+			return nil, result.err
+		}
+		resp := result.resp
+		if resp.Type == "error" {
+			return &IngestResult{Path: path, Error: resp.Message}, nil
+		}
+		if resp.Type != "done" {
+			return nil, fmt.Errorf("unexpected response: %s", resp.Type)
+		}
+		return &IngestResult{
+			Path:        resp.Path,
+			Chunks:      resp.Chunks,
+			TotalChunks: resp.TotalChunks,
+		}, nil
+	case <-time.After(5 * time.Minute):
+		return nil, fmt.Errorf("ingest timed out after 5 minutes")
 	}
-
-	if resp.Type != "done" {
-		return nil, fmt.Errorf("unexpected response: %s", resp.Type)
-	}
-
-	return &IngestResult{
-		Path:        resp.Path,
-		Chunks:      resp.Chunks,
-		TotalChunks: resp.TotalChunks,
-	}, nil
 }
 
 // Query sends a question to the RAG worker and returns the answer with sources.

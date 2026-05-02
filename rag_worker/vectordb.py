@@ -37,7 +37,8 @@ class VectorDB:
         if self._collection is None:
             try:
                 self._collection = self.client.get_collection("documents")
-            except ValueError:
+            except Exception:
+                # Collection may not exist (newer ChromaDB raises NotFoundError)
                 self._collection = self.client.create_collection("documents")
         return self._collection
 
