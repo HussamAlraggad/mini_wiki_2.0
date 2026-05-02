@@ -895,7 +895,32 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// --- Keyboard input ---
 	case tea.KeyMsg:
-		// While streaming, only allow Ctrl+C to interrupt
+		// Escape cancels EVERYTHING (universal cancel key)
+		if msg.Type == tea.KeyEscape {
+			a.clearSuggestions()
+			// Cancel LLM streaming
+			if a.streaming {
+				a.streaming = false
+				if a.streamCancel != nil {
+					a.streamCancel()
+					a.streamCancel = nil
+				}
+				a.currentStream = nil
+				a.streamContent.Reset()
+			}
+			// Cancel RAG worker
+			if a.busy && a.ragClient != nil && a.ragClient.IsRunning() {
+				a.ragClient.Stop()
+			}
+			a.busy = false
+			a.statusMsg = "Cancelled"
+			a.input.Focus()
+			var cmd tea.Cmd
+			a.input, cmd = a.input.Update(msg)
+			return a, cmd
+		}
+
+		// Ctrl+C during streaming: interrupt
 		if a.streaming {
 			if msg.Type == tea.KeyCtrlC {
 				a.streaming = false
@@ -953,16 +978,11 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		// Handle Escape to clear suggestions
-		if msg.Type == tea.KeyEscape {
-			a.clearSuggestions()
-			var cmd tea.Cmd
-			a.input, cmd = a.input.Update(msg)
-			return a, cmd
-		}
-
-		// Handle Ctrl+C / Ctrl+D to quit
+		// Handle Ctrl+C / Ctrl+D to quit (only when not streaming/busy)
 		if msg.Type == tea.KeyCtrlC || msg.Type == tea.KeyCtrlD {
+			if a.streaming || a.busy {
+				return a, nil // Escape handles cancellation
+			}
 			return a, tea.Quit
 		}
 
