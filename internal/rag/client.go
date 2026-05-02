@@ -343,14 +343,14 @@ func (c *Client) readResponse() (*Response, error) {
 	return &resp, nil
 }
 
-// stop sends shutdown and kills the process.
+// stop kills the process immediately (does not wait for graceful shutdown).
 func (c *Client) stop() {
-	if c.stdin != nil {
-		c.stdin.Write([]byte(`{"cmd":"shutdown"}` + "\n"))
-		c.stdin.Close()
-	}
 	if c.cmd != nil && c.cmd.Process != nil {
-		c.cmd.Wait()
+		c.cmd.Process.Kill()
+		c.cmd.Wait() // Wait will complete immediately after Kill
+	}
+	if c.stdin != nil {
+		c.stdin.Close()
 	}
 	c.cmd = nil
 	c.stdin = nil
