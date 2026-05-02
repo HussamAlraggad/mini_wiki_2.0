@@ -72,11 +72,6 @@ type (
 		Path     string
 		Callback func(content string, size int64) // optional
 	}
-	IngestComplete   struct {
-		Path    string
-		Content string
-		Size    int64
-	}
 	IngestFailed     struct {
 		Path string
 		Err  error
@@ -563,15 +558,21 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// --- File ingestion ---
 	case IngestRequested:
-		a.statusMsg = fmt.Sprintf("Reading %s...", msg.Path)
-		return a, ingestCmd(a.fileref, msg.Path, a.refCfg)
-
-	case IngestComplete:
-		a.statusMsg = fmt.Sprintf("Read %s (%s)", filepath.Base(msg.Path), humanBytes(msg.Size))
-		header := fmt.Sprintf("\n--- %s ---\n", msg.Path)
-		a.appendToViewport(helpStyle.Render(header + msg.Content))
-		// Also send to RAG worker for indexing (background)
-		a.ingestRAG(msg.Path)
+		path := msg.Path
+		a.statusMsg = fmt.Sprintf("Indexing %s...", filepath.Base(path))
+		a.appendToViewport(fmt.Sprintf("[Indexing %s with RAG worker]", filepath.Base(path)))
+		// Resolve the absolute path first (in goroutine, non-blocking)
+		go func() {
+			rootDir := a.scanCfg.RootDir
+			if rootDir == "" {
+				rootDir, _ = os.Getwd()
+			}
+			absPath, err := fileref.SafeResolve(rootDir, path)
+			if err != nil {
+				return
+			}
+			a.ingestRAG(absPath)
+		}()
 		return a, nil
 
 	case IngestFailed:
@@ -1546,31 +1547,6 @@ func scanCmd(scanner filescanner.Scanner, cfg filescanner.ScannerConfig) tea.Cmd
 	}
 }
 
-const maxDisplaySize = 10 * 1024 * 1024 // 10MB max to display in chat
-
-func ingestCmd(r fileref.Resolver, path string, cfg fileref.ResolverConfig) tea.Cmd {
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-
-		ref := fileref.Reference{Raw: "@" + path}
-		absPath, data, err := r.Resolve(ctx, ref, cfg)
-		if err != nil {
-			return IngestFailed{Path: path, Err: err}
-		}
-
-		size := int64(len(data))
-		content := string(data)
-
-		// If file is huge, truncate what we display in chat but keep the full path for RAG
-		if size > maxDisplaySize {
-			content = content[:maxDisplaySize] + "\n\n... [file truncated for display, full file sent to RAG worker]"
-		}
-
-		return IngestComplete{Path: absPath, Content: content, Size: size}
-	}
-}
-
 // humanBytes returns a human-readable byte size string.
 func humanBytes(b int64) string {
 	const unit = 1024
@@ -1793,25 +1769,8 @@ func (a *Application) updateSuggestions() {
 		}
 
 		lastToken := extractPathToken(val)
-		matched := false
-		for _, f := range a.fileIndex.Files {
-			rel, err := filepath.Rel(a.fileIndex.Root, f.Path)
-			if err != nil {
-				continue
-			}
-			baseName := filepath.Base(rel)
-			// Match against full path OR just the filename
-			if pathPrefixMatch(rel, lastToken) || strings.Contains(strings.ToLower(baseName), strings.ToLower(lastToken)) {
-				a.suggestions = append(a.suggestions, suggestionItem{
-					text:        "@" + rel,
-					description: fmt.Sprintf("%s (%s)", rel, humanBytes(f.Size)),
-					category:    "file",
-				})
-				matched = true
-			}
-		}
-		// If no match, show all files as a fallback (for bare @)
-		if !matched {
+		if lastToken == "" {
+			// Bare @ — show all files (up to 20)
 			for _, f := range a.fileIndex.Files {
 				rel, _ := filepath.Rel(a.fileIndex.Root, f.Path)
 				a.suggestions = append(a.suggestions, suggestionItem{
@@ -1819,11 +1778,34 @@ func (a *Application) updateSuggestions() {
 					description: fmt.Sprintf("%s (%s)", rel, humanBytes(f.Size)),
 					category:    "file",
 				})
+				if len(a.suggestions) >= 20 {
+					rem := len(a.fileIndex.Files) - 20
+					a.suggestions = append(a.suggestions, suggestionItem{
+						text:        "...",
+						description: fmt.Sprintf("%d more files", rem),
+						category:    "file",
+					})
+					break
+				}
 			}
-		}
-		// Limit suggestions
-		if len(a.suggestions) > 10 {
-			a.suggestions = a.suggestions[:10]
+		} else {
+			// Match by filename or path (like ls + grep)
+			lowerToken := strings.ToLower(lastToken)
+			for _, f := range a.fileIndex.Files {
+				rel, _ := filepath.Rel(a.fileIndex.Root, f.Path)
+				lowerRel := strings.ToLower(rel)
+				// Match: filename contains token, OR path contains token, OR directory prefix matches
+				if strings.Contains(lowerRel, lowerToken) || pathPrefixMatch(rel, lastToken) {
+					a.suggestions = append(a.suggestions, suggestionItem{
+						text:        "@" + rel,
+						description: fmt.Sprintf("%s (%s)", rel, humanBytes(f.Size)),
+						category:    "file",
+					})
+					if len(a.suggestions) >= 20 {
+						break
+					}
+				}
+			}
 		}
 	}
 }
