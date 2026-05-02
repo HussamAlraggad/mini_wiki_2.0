@@ -136,6 +136,12 @@ func extractRAGWorker() (string, error) {
 		return "", fmt.Errorf("read embedded dir: %w", err)
 	}
 
+	ragDir := filepath.Join(tmpDir, "rag_worker")
+	if err := os.MkdirAll(ragDir, 0755); err != nil {
+		os.RemoveAll(tmpDir)
+		return "", fmt.Errorf("create rag_worker dir: %w", err)
+	}
+
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
@@ -145,12 +151,12 @@ func extractRAGWorker() (string, error) {
 			os.RemoveAll(tmpDir)
 			return "", fmt.Errorf("read %s: %w", entry.Name(), err)
 		}
-		dest := filepath.Join(tmpDir, entry.Name())
+		dest := filepath.Join(ragDir, entry.Name())
 		if err := os.WriteFile(dest, data, 0644); err != nil {
 			os.RemoveAll(tmpDir)
 			return "", fmt.Errorf("write %s: %w", entry.Name(), err)
 		}
 	}
 
-	return tmpDir, nil
+	return ragDir, nil
 }

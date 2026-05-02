@@ -1766,55 +1766,119 @@ func (a *Application) updateSuggestions() {
 		return
 	}
 
-	// 2. If typing @ or a partial path, suggest files from the scanned index
+	// 2. If typing @, suggest files from the filesystem directly (like ls)
 	if strings.Contains(val, "@") || strings.HasPrefix(val, ".") || strings.HasPrefix(val, "/") {
-		// If no scan has been done, show a helpful hint
-		if a.fileIndex == nil {
-			a.suggestions = append(a.suggestions, suggestionItem{
-				text:        "/scan",
-				description: "Run /scan first to index files for completion",
-				category:    "cmd",
-			})
+		a.suggestAtFiles(val)
+	}
+}
+
+// suggestAtFiles lists files/dirs from the filesystem like ls, used for @ completion.
+func (a *Application) suggestAtFiles(val string) {
+	rootDir := a.scanCfg.RootDir
+	if rootDir == "" {
+		return
+	}
+
+	lastToken := extractPathToken(val)
+	if lastToken == "" {
+		// Bare @: list current directory like ls
+		entries, err := os.ReadDir(rootDir)
+		if err != nil {
 			return
 		}
-
-		lastToken := extractPathToken(val)
-		if lastToken == "" {
-			// Bare @ — show all files (up to 20)
-			for _, f := range a.fileIndex.Files {
-				rel, _ := filepath.Rel(a.fileIndex.Root, f.Path)
+		for _, e := range entries {
+			name := e.Name()
+			if e.IsDir() {
 				a.suggestions = append(a.suggestions, suggestionItem{
-					text:        "@" + rel,
-					description: fmt.Sprintf("%s (%s)", rel, humanBytes(f.Size)),
+					text:        "@" + name + "/",
+					description: fmt.Sprintf("dir  %s", name),
 					category:    "file",
 				})
-				if len(a.suggestions) >= 20 {
-					rem := len(a.fileIndex.Files) - 20
-					a.suggestions = append(a.suggestions, suggestionItem{
-						text:        "...",
-						description: fmt.Sprintf("%d more files", rem),
-						category:    "file",
-					})
-					break
+			} else {
+				info, _ := e.Info()
+				size := int64(0)
+				if info != nil {
+					size = info.Size()
 				}
+				a.suggestions = append(a.suggestions, suggestionItem{
+					text:        "@" + name,
+					description: fmt.Sprintf("file  %s  (%s)", name, humanBytes(size)),
+					category:    "file",
+				})
 			}
-		} else {
-			// Match by filename or path (like ls + grep)
-			lowerToken := strings.ToLower(lastToken)
-			for _, f := range a.fileIndex.Files {
-				rel, _ := filepath.Rel(a.fileIndex.Root, f.Path)
-				lowerRel := strings.ToLower(rel)
-				// Match: filename contains token, OR path contains token, OR directory prefix matches
-				if strings.Contains(lowerRel, lowerToken) || pathPrefixMatch(rel, lastToken) {
-					a.suggestions = append(a.suggestions, suggestionItem{
-						text:        "@" + rel,
-						description: fmt.Sprintf("%s (%s)", rel, humanBytes(f.Size)),
-						category:    "file",
-					})
-					if len(a.suggestions) >= 20 {
-						break
-					}
+			if len(a.suggestions) >= 20 {
+				rem := "more..."
+				a.suggestions = append(a.suggestions, suggestionItem{
+					text:        "...",
+					description: rem,
+					category:    "file",
+				})
+				break
+			}
+		}
+		return
+	}
+
+	// Has a token: list directory contents filtered by name (like ls | grep)
+	// Split into directory path and filter
+	dirPath := rootDir
+	filter := lastToken
+
+	if strings.Contains(lastToken, "/") {
+		// e.g. "subdir/filter" or "subdir/"
+		idx := strings.LastIndex(lastToken, "/")
+		dirPart := lastToken[:idx]
+		filter = lastToken[idx+1:]
+		dirPath = filepath.Join(rootDir, dirPart)
+	}
+
+	entries, err := os.ReadDir(dirPath)
+	if err != nil {
+		return
+	}
+
+	lowerFilter := strings.ToLower(filter)
+	for _, e := range entries {
+		name := e.Name()
+		lowerName := strings.ToLower(name)
+
+		// If filter is empty or name contains filter text
+		if filter == "" || strings.Contains(lowerName, lowerFilter) {
+			relPath := lastToken
+			if strings.HasSuffix(relPath, "/") {
+				relPath = relPath + name
+			} else if filter != "" && !strings.HasSuffix(relPath, name) {
+				// Replace the filter portion with the full name
+				idx := strings.LastIndex(relPath, filter)
+				if idx >= 0 {
+					relPath = relPath[:idx] + name
+				} else {
+					relPath = lastToken[:strings.LastIndex(lastToken, "/")+1] + name
 				}
+			} else {
+				relPath = name
+			}
+
+			if e.IsDir() {
+				a.suggestions = append(a.suggestions, suggestionItem{
+					text:        "@" + relPath + "/",
+					description: fmt.Sprintf("dir  %s", relPath+"/"),
+					category:    "file",
+				})
+			} else {
+				info, _ := e.Info()
+				size := int64(0)
+				if info != nil {
+					size = info.Size()
+				}
+				a.suggestions = append(a.suggestions, suggestionItem{
+					text:        "@" + relPath,
+					description: fmt.Sprintf("file  %s  (%s)", relPath, humanBytes(size)),
+					category:    "file",
+				})
+			}
+			if len(a.suggestions) >= 20 {
+				break
 			}
 		}
 	}
@@ -1835,25 +1899,6 @@ func extractPathToken(val string) string {
 		}
 	}
 	return ""
-}
-
-// pathPrefixMatch checks if a file path starts with the given prefix (supporting subdir matching).
-// For example, if prefix is "child_dir/", it matches "child_dir/file.txt" and "child_dir/sub/file.txt".
-func pathPrefixMatch(relPath, prefix string) bool {
-	if prefix == "" {
-		return false
-	}
-	// Normalize: remove leading @ if present
-	prefix = strings.TrimPrefix(prefix, "@")
-	// Direct prefix match (for @ references and full paths)
-	if strings.HasPrefix(relPath, prefix) {
-		return true
-	}
-	// If prefix is a directory name with trailing /, match anything inside
-	if strings.HasSuffix(prefix, "/") {
-		return strings.HasPrefix(relPath, prefix)
-	}
-	return false
 }
 
 func (a *Application) cycleSuggestion(val string) {
