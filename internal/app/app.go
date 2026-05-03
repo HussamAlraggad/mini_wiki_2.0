@@ -36,6 +36,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/xuri/excelize/v2"
 )
 
 // --- Message types for Bubbletea ---
@@ -2794,6 +2795,8 @@ func ingestLocalCmd(a *Application, path string) tea.Cmd {
 			format = "csv"
 		} else if ext == ".jsonl" || ext == ".ndjson" || ext == ".json" {
 			format = "jsonl"
+		} else if ext == ".xlsx" {
+			format = "xlsx"
 		}
 
 		// Count rows by reading through the file
@@ -2808,26 +2811,50 @@ func ingestLocalCmd(a *Application, path string) tea.Cmd {
 
 // countFileRows quickly counts the number of rows in a file without parsing fully.
 func countFileRows(path, format string) int {
-	f, err := os.Open(path)
-	if err != nil {
-		return 0
-	}
-	defer f.Close()
-
-	count := 0
-	scanner := bufio.NewScanner(f)
-	if format == "jsonl" || format == "csv" || format == "txt" {
+	switch format {
+	case "jsonl", "csv", "txt":
+		f, err := os.Open(path)
+		if err != nil {
+			return 0
+		}
+		defer f.Close()
+		count := 0
+		scanner := bufio.NewScanner(f)
 		for scanner.Scan() {
 			line := strings.TrimSpace(scanner.Text())
 			if line != "" {
 				count++
 			}
 		}
+		if count == 0 {
+			count = 1
+		}
+		return count
+
+	case "xlsx":
+		return countXLSXRows(path)
+
+	default:
+		return 1
 	}
-	if count == 0 {
-		count = 1
+}
+
+// countXLSXRows counts rows in the first sheet of an Excel file.
+func countXLSXRows(path string) int {
+	f, err := excelize.OpenFile(path)
+	if err != nil {
+		return 0
 	}
-	return count
+	defer f.Close()
+
+	rows, err := f.GetRows(f.GetSheetName(0))
+	if err != nil {
+		return 0
+	}
+	if len(rows) == 0 {
+		return 1
+	}
+	return len(rows)
 }
 
 // embedStream runs the RAG embedder in a goroutine (for /embed command).
