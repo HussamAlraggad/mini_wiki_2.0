@@ -8,6 +8,40 @@
 
 ---
 
+## May 3 -- Phase 4: Relevance Ranking (COMPLETE)
+
+### What was done
+- LoadDataset implemented: opens project KB SQLite, queries active_dataset,
+  re-parses CSV/JSONL/text into *dataset.Dataset
+- active_dataset table added to projectkb + Set/Get methods
+- RAGDone handler registers file as active dataset
+- /compare command: side-by-side comparison with previous ranking, delta display
+- /compare <topic>: Rerank with refined topic, shows old vs new ranking
+- /discard <threshold>: preview keep/discard counts, asks y/N confirmation
+- /discard --preview <threshold>: preview without confirmation prompt
+- /discard --reset: restore all previously discarded rows
+- awaitingYn state for y/n confirmation flow in keyboard handler
+- Rerank() method for iterative refinement
+- All edge cases handled: no ranking, empty topic, invalid threshold
+
+### Interface changes made
+- currentRank *ranking.RankResult field added to Application struct
+- awaitingYn, pendingYNMsg, pendingThreshold for confirmation flow
+- discardRowsAtThreshold method added to Application
+
+### Test status
+```
+All 15 suite tests pass.
+```
+
+### Handoff to next agent
+- Phase 4 is complete. Next phase to implement is Phase 5: Data Visualization (/chart)
+- Phase 5 requires creating internal/chart/ package with chart types
+- Phase 5 needs to consume *ranking.RankResult (or *dataset.Dataset directly)
+- See plan.md section 9 for chart specs
+
+---
+
 ## May 3 -- Phase 4: Relevance Ranking (INPROGRESS)
 
 ### What was done

@@ -14,6 +14,7 @@ import (
 
 	"mini-wiki/internal/config"
 	"mini-wiki/internal/conversation"
+	"mini-wiki/internal/chart"
 	"mini-wiki/internal/csvparser"
 	"mini-wiki/internal/dataset"
 	"mini-wiki/internal/export"
@@ -144,6 +145,16 @@ type (
 		Keep      int
 		Discard   int
 	}
+
+	// Phase 5: Charts
+	ChartRequested struct {
+		Type    string
+		ColumnX string
+		ColumnY string
+		Buckets int
+	}
+	ChartComplete struct{ Text string }
+	ChartFailed   struct{ Err error }
 )
 
 // --- Layout ---
@@ -717,6 +728,26 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.pendingThreshold = threshold
 		a.appendToViewport(a.pendingYNMsg)
 		a.statusMsg = "Waiting for confirmation..."
+		return a, nil
+
+	// --- Charts ---
+	case ChartRequested:
+		if a.currentRank == nil || a.currentRank.Dataset == nil {
+			a.errMsg = "No data to chart. Ingest a dataset and run /rank first."
+			return a, nil
+		}
+		a.busy = true
+		return a, chartCmd(a, msg)
+
+	case ChartComplete:
+		a.busy = false
+		a.appendToViewport(msg.Text)
+		a.statusMsg = "Chart rendered"
+		return a, nil
+
+	case ChartFailed:
+		a.busy = false
+		a.errMsg = fmt.Sprintf("Chart error: %v", msg.Err)
 		return a, nil
 
 	// --- Web fetching ---
@@ -1375,6 +1406,34 @@ Memory & RAG:
 		}
 		return a, func() tea.Msg { return DiscardRequested{Threshold: threshold} }
 
+	case "/chart":
+		if len(parts) < 2 {
+			a.errMsg = "Usage: /chart <type> [options]"
+			return a, nil
+		}
+		chartType := strings.ToLower(parts[1])
+		colX := ""
+		colY := ""
+		buckets := 10
+		// Parse options: column=<name>, x=<col>, y=<col>, buckets=<n>
+		for _, p := range parts[2:] {
+			if strings.HasPrefix(p, "column=") {
+				colX = strings.TrimPrefix(p, "column=")
+			} else if strings.HasPrefix(p, "x=") {
+				colX = strings.TrimPrefix(p, "x=")
+			} else if strings.HasPrefix(p, "y=") {
+				colY = strings.TrimPrefix(p, "y=")
+			} else if strings.HasPrefix(p, "buckets=") {
+				n, err := strconv.Atoi(strings.TrimPrefix(p, "buckets="))
+				if err == nil && n > 0 {
+					buckets = n
+				}
+			}
+		}
+		return a, func() tea.Msg {
+			return ChartRequested{Type: chartType, ColumnX: colX, ColumnY: colY, Buckets: buckets}
+		}
+
 	case "/cancel":
 		a.statusMsg = "Cancelling..."
 		if a.ragClient != nil && a.ragClient.IsRunning() {
@@ -1975,6 +2034,7 @@ var commandList = []suggestionItem{
 	{text: "/rank", description: "Rank dataset rows by relevance to topic", category: "cmd"},
 	{text: "/compare", description: "Compare rankings iteratively", category: "cmd"},
 	{text: "/discard", description: "Discard rows below relevance threshold", category: "cmd"},
+	{text: "/chart", description: "Generate chart (bar, trend, pie, scatter, histogram, box, heatmap)", category: "cmd"},
 	{text: "/srs", description: "Run SRS generation pipeline", category: "cmd"},
 	{text: "/cancel", description: "Cancel current RAG operation", category: "cmd"},
 	{text: "/exit", description: "Quit the application", category: "cmd"},
@@ -2328,6 +2388,36 @@ func (a *Application) discardRowsAtThreshold(result *ranking.RankResult, thresho
 		RowsDiscarded: discarded,
 	})
 	a.appendToViewport(fmt.Sprintf("Discarded %d rows. Remaining: %d rows.", discarded, kept.RowCount))
+}
+
+func chartCmd(a *Application, msg ChartRequested) tea.Cmd {
+	return func() tea.Msg {
+		ds := a.currentRank.Dataset
+		cfg := chart.Config{
+			Type:    chart.ChartType(msg.Type),
+			ColumnX: msg.ColumnX,
+			ColumnY: msg.ColumnY,
+			Buckets: msg.Buckets,
+			Width:   a.width - 10,
+			Height:  16,
+		}
+
+		// Auto-detect columns if not specified
+		if cfg.ColumnX == "" {
+			for _, col := range ds.Columns {
+				if col.Name != "relevance_score" {
+					cfg.ColumnX = col.Name
+					break
+				}
+			}
+		}
+
+		c, err := chart.Render(ds, cfg)
+		if err != nil {
+			return ChartFailed{Err: err}
+		}
+		return ChartComplete{Text: c.Terminal}
+	}
 }
 
 func srsPipelineCmd(pipeline *srs.Pipeline, data string) tea.Cmd {
