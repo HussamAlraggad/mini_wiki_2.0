@@ -210,34 +210,50 @@ func (c *Client) Ingest(path string, embedModel string) (*IngestResult, error) {
 
 // IngestStream sends a file to the RAG worker for indexing with real-time progress.
 // The onProgress callback is called for each progress message as it arrives.
-func (c *Client) IngestStream(path string, embedModel string, onProgress func(msg string)) error {
+// On timeout or error, the Python worker process is killed.
+// Returns the number of chunks indexed on success.
+func (c *Client) IngestStream(path string, embedModel string, onProgress func(msg string)) (int, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 
 	req := Request{Cmd: "ingest", Path: path, EmbedModel: embedModel}
 	if err := c.sendRequest(req); err != nil {
-		return err
+		c.mu.Unlock()
+		return 0, err
 	}
 
+	// Release mutex during the blocking wait, so Stop() can be called from
+	// another goroutine (e.g. Escape key). Re-acquire only when we're done.
+	c.mu.Unlock()
+
+	// Channel to signal process kill when we need to abort
+	done := make(chan struct{}, 1)
+	defer func() { close(done) }()
+
+	type respResult struct {
+		resp *Response
+		err  error
+	}
+
+	// Read responses with 30-minute timeout
 	timeout := time.After(30 * time.Minute)
 	for {
-		type respResult struct {
-			resp *Response
-			err  error
-		}
 		resultCh := make(chan respResult, 1)
 		go func() {
 			resp, err := c.readResponse()
-			resultCh <- respResult{resp, err}
+			select {
+			case resultCh <- respResult{resp, err}:
+			case <-done:
+			}
 		}()
 
 		select {
 		case r := <-resultCh:
 			if r.err != nil {
+				c.killProcess()
 				if c.lastError != "" {
-					return fmt.Errorf("worker: %s", c.lastError)
+					return 0, fmt.Errorf("worker: %s", c.lastError)
 				}
-				return r.err
+				return 0, r.err
 			}
 			resp := r.resp
 			switch resp.Type {
@@ -247,15 +263,30 @@ func (c *Client) IngestStream(path string, embedModel string, onProgress func(ms
 				}
 				continue
 			case "error":
-				return fmt.Errorf("%s", resp.Message)
+				c.killProcess()
+				return 0, fmt.Errorf("%s", resp.Message)
 			case "done":
-				return nil
+				return resp.Chunks, nil
 			default:
-				return fmt.Errorf("unexpected response: %s", resp.Type)
+				c.killProcess()
+				return 0, fmt.Errorf("unexpected response: %s", resp.Type)
 			}
 		case <-timeout:
-			return fmt.Errorf("ingest timed out after 30 minutes")
+			c.killProcess()
+			return 0, fmt.Errorf("ingest timed out after 30 minutes")
 		}
+	}
+}
+
+// killProcess kills the Python worker process without acquiring the mutex.
+// Safe to call from any goroutine.
+func (c *Client) killProcess() {
+	if c.cmd != nil && c.cmd.Process != nil {
+		c.cmd.Process.Kill()
+		c.cmd.Wait()
+	}
+	if c.stdin != nil {
+		c.stdin.Close()
 	}
 }
 

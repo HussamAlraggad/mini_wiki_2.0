@@ -2775,8 +2775,7 @@ func (a *Application) ingestStream(path string) {
 	}
 
 	// Run ingest with real-time progress via callback
-	chunks := 0
-	err = a.ragClient.IngestStream(absPath, "nomic-embed-text", func(msg string) {
+	chunks, err := a.ragClient.IngestStream(absPath, "nomic-embed-text", func(msg string) {
 		p.Send(RAGProgressMsg{Text: msg})
 	})
 	if err != nil {
