@@ -74,13 +74,20 @@ class VectorDB:
                     clean[k] = json.dumps(v)
             clean_metadatas.append(clean)
 
-        self.collection.add(
-            ids=ids,
-            embeddings=embeddings,
-            documents=texts,
-            metadatas=clean_metadatas,
-        )
-        return len(ids)
+        # ChromaDB has a max batch size limit. Split into batches of 1000.
+        batch_size = 1000
+        total = len(ids)
+        added = 0
+        for i in range(0, total, batch_size):
+            end = min(i + batch_size, total)
+            self.collection.add(
+                ids=ids[i:end],
+                embeddings=embeddings[i:end],
+                documents=texts[i:end],
+                metadatas=clean_metadatas[i:end],
+            )
+            added += (end - i)
+        return added
 
     def search(
         self, query_embedding: List[float], top_k: int = 5
