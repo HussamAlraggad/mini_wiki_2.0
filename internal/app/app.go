@@ -15,6 +15,7 @@ import (
 	"mini-wiki/internal/config"
 	"mini-wiki/internal/conversation"
 	"mini-wiki/internal/csvparser"
+	"mini-wiki/internal/dataset"
 	"mini-wiki/internal/export"
 	"mini-wiki/internal/fileref"
 	"mini-wiki/internal/filescanner"
@@ -261,8 +262,12 @@ type Application struct {
 	fetcher   webfetch.Fetcher
 	exporter   export.Exporter
 	pkb       projectkb.DB
-	ragClient *rag.Client
-	ragDir    string
+	ragClient    *rag.Client
+	ragDir       string
+	currentRank  *ranking.RankResult // last /rank result in memory
+	awaitingYn      bool                // waiting for y/n confirmation
+	pendingYNMsg    string              // the question being asked
+	pendingThreshold float64             // threshold being confirmed for /discard
 	mem        memory.MemStore
 	srsPipeline *srs.Pipeline
 
@@ -642,8 +647,8 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case RankComplete:
 		a.busy = false
 		a.appendToViewport(msg.Text)
-		// Save ranking to project KB
 		if msg.Result != nil {
+			a.currentRank = msg.Result
 			_ = a.pkb.SaveRanking(context.Background(), &projectkb.RankingResult{
 				Topic:  msg.Result.Topic,
 				Scores: ranking.ResultsToJSON(msg.Result.Scores, msg.Result.Topic),
@@ -658,15 +663,60 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case CompareRequested:
-		// TODO: Implement comparison with previous ranking
-		a.appendToViewport("Comparison will compare current ranking with a previous one.")
+		if a.currentRank == nil {
+			a.errMsg = "No ranking to compare. Run /rank first."
+			return a, nil
+		}
+		if msg.Topic == "" {
+			// No topic: show current ranking again
+			table := ranking.FormatRankingTable(a.currentRank, 20)
+			a.appendToViewport(table)
+		} else {
+			// New topic: rerank and show comparison
+			a.busy = true
+			a.statusMsg = "Re-ranking with new topic..."
+			return a, compareCmd(a, msg.Topic)
+		}
 		a.statusMsg = "Compare"
 		return a, nil
 
 	case DiscardRequested:
-		// TODO: Implement discard with confirmation
-		a.appendToViewport(fmt.Sprintf("Discard at threshold %.2f -- implement confirmation flow.", msg.Threshold))
-		a.statusMsg = "Discard"
+		if a.currentRank == nil {
+			a.errMsg = "No ranking to discard from. Run /rank first."
+			return a, nil
+		}
+		threshold := msg.Threshold
+		if threshold < 0 || threshold > 1 {
+			a.errMsg = "Threshold must be between 0.0 and 1.0"
+			return a, nil
+		}
+
+		// Count keep vs discard
+		keep := 0
+		discard := 0
+		for _, s := range a.currentRank.Scores {
+			if s >= threshold {
+				keep++
+			} else {
+				discard++
+			}
+		}
+
+		preview := fmt.Sprintf("Threshold: %.2f\n  Keep: %d rows (score >= %.2f)\n  Discard: %d rows (score < %.2f)",
+			threshold, keep, threshold, discard, threshold)
+		a.appendToViewport(preview)
+
+		if discard == 0 {
+			a.appendToViewport("No rows to discard at this threshold.")
+			return a, nil
+		}
+
+		// Ask for confirmation (preview-only: --preview flag skips confirm)
+		a.awaitingYn = true
+		a.pendingYNMsg = fmt.Sprintf("Discard %d rows below score %.2f? (y/N)", discard, threshold)
+		a.pendingThreshold = threshold
+		a.appendToViewport(a.pendingYNMsg)
+		a.statusMsg = "Waiting for confirmation..."
 		return a, nil
 
 	// --- Web fetching ---
@@ -959,6 +1009,28 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// --- Keyboard input ---
 	case tea.KeyMsg:
+		// Handle y/n confirmation prompt
+		if a.awaitingYn {
+			a.awaitingYn = false
+			if msg.Type == tea.KeyRunes && len(msg.Runes) > 0 {
+				ch := msg.Runes[0]
+				if ch == 'y' || ch == 'Y' {
+					// Confirmed: execute the discard
+					if a.currentRank != nil {
+						a.discardRowsAtThreshold(a.currentRank, a.pendingThreshold)
+					}
+				} else {
+					a.appendToViewport("Cancelled.")
+				}
+			} else {
+				a.appendToViewport("Cancelled.")
+			}
+			a.statusMsg = "Ready"
+			var cmd tea.Cmd
+			a.input, cmd = a.input.Update(msg)
+			return a, cmd
+		}
+
 		// Escape cancels EVERYTHING (universal cancel key)
 		if msg.Type == tea.KeyEscape {
 			a.clearSuggestions()
@@ -1271,6 +1343,27 @@ Memory & RAG:
 		return a, func() tea.Msg { return CompareRequested{Topic: ""} }
 
 	case "/discard":
+		if len(parts) >= 2 && parts[1] == "--reset" {
+			if a.currentRank != nil {
+				a.currentRank.DiscardCount = 0
+				a.appendToViewport("All previously discarded rows restored.")
+			} else {
+				a.errMsg = "No ranking to reset."
+			}
+			return a, nil
+		}
+		if len(parts) >= 2 && parts[1] == "--preview" {
+			if len(parts) < 3 {
+				a.errMsg = "Usage: /discard --preview <threshold>"
+				return a, nil
+			}
+			threshold, err := strconv.ParseFloat(parts[2], 64)
+			if err != nil || threshold < 0 || threshold > 1 {
+				a.errMsg = "Threshold must be between 0.0 and 1.0"
+				return a, nil
+			}
+			return a, func() tea.Msg { return DiscardRequested{Threshold: threshold} }
+		}
 		if len(parts) < 2 {
 			a.errMsg = "Usage: /discard <threshold>"
 			return a, nil
@@ -2187,6 +2280,54 @@ func rankCmd(a *Application, topic string) tea.Cmd {
 		text := ranking.FormatRankingTable(result, 20)
 		return RankComplete{Result: result, Text: text}
 	}
+}
+
+func compareCmd(a *Application, newTopic string) tea.Cmd {
+	return func() tea.Msg {
+		if a.currentRank == nil {
+			return RankFailed{Err: fmt.Errorf("no previous ranking")}
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		defer cancel()
+
+		ranker := ranking.NewRanker(&srsLLMAdapter{client: a.client}, ranking.DefaultConfig())
+		newResult, err := ranker.Rerank(ctx, a.currentRank, newTopic)
+		if err != nil {
+			return RankFailed{Err: err}
+		}
+
+		// Build comparison display
+		comparison := ranking.FormatComparison(a.currentRank, newResult)
+		oldTable := ranking.FormatRankingTable(a.currentRank, 5)
+		newTable := ranking.FormatRankingTable(newResult, 5)
+
+		text := fmt.Sprintf("=== Comparison ===\nPrevious topic: %s\nNew topic: %s\n\n%s\n\nOld ranking:\n%s\n\nNew ranking:\n%s",
+			a.currentRank.Topic, newTopic, comparison, oldTable, newTable)
+
+		return RankComplete{Result: newResult, Text: text}
+	}
+}
+
+// discardRowsAtThreshold removes rows below the threshold from the working set.
+func (a *Application) discardRowsAtThreshold(result *ranking.RankResult, threshold float64) {
+	if result == nil {
+		return
+	}
+	kept := result.Dataset.Filter(func(r dataset.Row) bool {
+		if s, ok := r.Data["relevance_score"].(float64); ok {
+			return s >= threshold
+		}
+		return false
+	})
+	discarded := result.Dataset.RowCount - kept.RowCount
+	result.Dataset = kept
+	result.DiscardCount += discarded
+	_ = a.pkb.SaveDiscardEntry(context.Background(), &projectkb.DiscardEntry{
+		Threshold:     threshold,
+		RowsDiscarded: discarded,
+	})
+	a.appendToViewport(fmt.Sprintf("Discarded %d rows. Remaining: %d rows.", discarded, kept.RowCount))
 }
 
 func srsPipelineCmd(pipeline *srs.Pipeline, data string) tea.Cmd {
