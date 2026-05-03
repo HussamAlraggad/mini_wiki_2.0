@@ -2,6 +2,8 @@ package ranking
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -153,10 +155,103 @@ func TestResultsToJSON(t *testing.T) {
 	}
 }
 
-func TestLoadDataset_NotImplemented(t *testing.T) {
-	_, err := LoadDataset("/tmp/nonexistent")
+func TestLoadDataset_NoProjectDir(t *testing.T) {
+	_, err := LoadDataset("")
 	if err == nil {
-		t.Error("expected error (not implemented)")
+		t.Error("expected error for empty project dir")
+	}
+}
+
+func TestParseCSV(t *testing.T) {
+	dir := t.TempDir()
+	csvPath := filepath.Join(dir, "test.csv")
+	csvContent := "name,age\nAlice,30\nBob,25\n"
+	if err := os.WriteFile(csvPath, []byte(csvContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ds, err := parseCSV(csvPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if ds.RowCount != 2 {
+		t.Errorf("expected 2 rows, got %d", ds.RowCount)
+	}
+	if ds.ColumnCount != 2 {
+		t.Errorf("expected 2 columns, got %d", ds.ColumnCount)
+	}
+	if ds.Rows[0].Data["name"] != "Alice" {
+		t.Errorf("expected Alice, got %v", ds.Rows[0].Data["name"])
+	}
+}
+
+func TestParseJSONL(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.jsonl")
+	content := `{"name": "Alice", "age": 30}
+{"name": "Bob", "age": 25}
+`
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ds, err := parseJSONL(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if ds.RowCount != 2 {
+		t.Errorf("expected 2 rows, got %d", ds.RowCount)
+	}
+	if ds.ColumnCount != 2 {
+		t.Errorf("expected 2 columns, got %d", ds.ColumnCount)
+	}
+}
+
+func TestParseText(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.txt")
+	content := "hello world"
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ds, err := parseText(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if ds.RowCount != 1 {
+		t.Errorf("expected 1 row, got %d", ds.RowCount)
+	}
+	if ds.ColumnCount != 1 {
+		t.Errorf("expected 1 column, got %d", ds.ColumnCount)
+	}
+}
+
+func TestDetectColumnTypes(t *testing.T) {
+	ds := &dataset.Dataset{
+		Columns: []dataset.Column{
+			{Name: "name", Kind: dataset.ColumnString},
+			{Name: "age", Kind: dataset.ColumnString},
+			{Name: "score", Kind: dataset.ColumnString},
+		},
+		Rows: []dataset.Row{
+			{Data: map[string]interface{}{"name": "Alice", "age": "30", "score": "95.5"}},
+			{Data: map[string]interface{}{"name": "Bob", "age": "25", "score": "87.3"}},
+		},
+	}
+	detectColumnTypes(ds)
+
+	if ds.Columns[0].Kind != dataset.ColumnString {
+		t.Errorf("name should remain string, got %v", ds.Columns[0].Kind)
+	}
+	if ds.Columns[1].Kind != dataset.ColumnInteger {
+		t.Errorf("age should be integer, got %v", ds.Columns[1].Kind)
+	}
+	if ds.Columns[2].Kind != dataset.ColumnFloat {
+		t.Errorf("score should be float, got %v", ds.Columns[2].Kind)
 	}
 }
 

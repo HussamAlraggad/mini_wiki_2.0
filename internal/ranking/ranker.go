@@ -4,15 +4,22 @@
 package ranking
 
 import (
+	"bufio"
 	"context"
+	"database/sql"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
 	"mini-wiki/internal/dataset"
+
+	_ "modernc.org/sqlite"
 )
 
 // ScoreRecord stores a single row's score for persistence.
@@ -358,7 +365,213 @@ func FormatComparison(prev, curr *RankResult) string {
 // LoadDataset reads the currently active ingested dataset from the project KB.
 // This is the Phase 3 -> Phase 4 boundary.
 func LoadDataset(projectDir string) (*dataset.Dataset, error) {
-	// TODO: Implement reading from ChromaDB or SQLite KB
-	// For now, returns an error indicating no dataset is loaded
-	return nil, fmt.Errorf("no dataset ingested. Use /ingest first.")
+	if projectDir == "" {
+		return nil, fmt.Errorf("no project directory set")
+	}
+
+	// Open project KB
+	kbPath := filepath.Join(projectDir, ".wiki", "kb.sqlite")
+	db, err := sql.Open("sqlite", kbPath)
+	if err != nil {
+		return nil, fmt.Errorf("open project kb: %w", err)
+	}
+	defer db.Close()
+
+	// Query active dataset
+	var filePath, fileFormat string
+	err = db.QueryRow(`SELECT file_path, file_format FROM active_dataset ORDER BY id DESC LIMIT 1`).Scan(&filePath, &fileFormat)
+	if err != nil {
+		return nil, fmt.Errorf("no dataset ingested. Use /ingest first.")
+	}
+
+	// Re-parse the file based on format
+	switch fileFormat {
+	case "csv":
+		return parseCSV(filePath)
+	case "jsonl":
+		return parseJSONL(filePath)
+	default:
+		return parseText(filePath)
+	}
+}
+
+// parseCSV re-parses a CSV file into a *dataset.Dataset.
+func parseCSV(path string) (*dataset.Dataset, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("open csv: %w", err)
+	}
+	defer f.Close()
+
+	reader := csv.NewReader(bufio.NewReader(f))
+	reader.LazyQuotes = true
+	reader.FieldsPerRecord = -1
+
+	// Read header
+	headers, err := reader.Read()
+	if err != nil {
+		return nil, fmt.Errorf("read csv header: %w", err)
+	}
+
+	ds := &dataset.Dataset{
+		Name:       filepath.Base(path),
+		SourceFile: path,
+		IngestedAt: time.Now(),
+	}
+
+	for _, h := range headers {
+		ds.Columns = append(ds.Columns, dataset.Column{
+			Name: h,
+			Kind: dataset.ColumnString,
+		})
+	}
+	ds.ColumnCount = len(ds.Columns)
+
+	// Read rows
+	rowIdx := 0
+	for {
+		record, err := reader.Read()
+		if err != nil {
+			break
+		}
+		row := dataset.Row{
+			Index: rowIdx,
+			Data:  make(map[string]interface{}),
+		}
+		for i, val := range record {
+			if i < len(headers) {
+				row.Data[headers[i]] = val
+			}
+		}
+		ds.Rows = append(ds.Rows, row)
+		rowIdx++
+	}
+	ds.RowCount = len(ds.Rows)
+
+	// Detect column types from first 100 rows
+	detectColumnTypes(ds)
+
+	return ds, nil
+}
+
+// parseJSONL re-parses a JSONL file into a *dataset.Dataset.
+func parseJSONL(path string) (*dataset.Dataset, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("open jsonl: %w", err)
+	}
+	defer f.Close()
+
+	ds := &dataset.Dataset{
+		Name:       filepath.Base(path),
+		SourceFile: path,
+		IngestedAt: time.Now(),
+	}
+
+	scanner := bufio.NewScanner(f)
+	fieldSet := make(map[string]bool)
+	var fields []string
+	rowIdx := 0
+
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+
+		var data map[string]interface{}
+		if err := json.Unmarshal([]byte(line), &data); err != nil {
+			continue
+		}
+
+		// Collect field names from first row
+		if len(fieldSet) == 0 {
+			for k := range data {
+				fieldSet[k] = true
+				fields = append(fields, k)
+			}
+			for _, f := range fields {
+				ds.Columns = append(ds.Columns, dataset.Column{
+					Name: f,
+					Kind: dataset.ColumnString,
+				})
+			}
+			ds.ColumnCount = len(ds.Columns)
+		}
+
+		row := dataset.Row{
+			Index: rowIdx,
+			Data:  make(map[string]interface{}),
+		}
+		for _, field := range fields {
+			if val, ok := data[field]; ok {
+				row.Data[field] = val
+			}
+		}
+		ds.Rows = append(ds.Rows, row)
+		rowIdx++
+	}
+	ds.RowCount = len(ds.Rows)
+	detectColumnTypes(ds)
+
+	return ds, nil
+}
+
+// parseText reads a plain text file as a single-column dataset.
+func parseText(path string) (*dataset.Dataset, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read text: %w", err)
+	}
+
+	ds := &dataset.Dataset{
+		Name:       filepath.Base(path),
+		SourceFile: path,
+		Columns: []dataset.Column{
+			{Name: "text", Kind: dataset.ColumnString},
+		},
+		ColumnCount: 1,
+		IngestedAt:  time.Now(),
+		Rows: []dataset.Row{
+			{Index: 0, Data: map[string]interface{}{"text": string(data)}},
+		},
+		RowCount: 1,
+	}
+	return ds, nil
+}
+
+// detectColumnTypes samples the first 100 rows to infer column types.
+func detectColumnTypes(ds *dataset.Dataset) {
+	maxRows := 100
+	if len(ds.Rows) < maxRows {
+		maxRows = len(ds.Rows)
+	}
+	for i := range ds.Columns {
+		allInt := true
+		allFloat := true
+		for _, row := range ds.Rows[:maxRows] {
+			val, ok := row.Data[ds.Columns[i].Name]
+			if !ok {
+				continue
+			}
+			s := fmt.Sprintf("%v", val)
+			// Check if it contains a decimal point or exponent (float indicator)
+			isFloatFormatted := strings.Contains(s, ".") || strings.Contains(s, "e") || strings.Contains(s, "E")
+			// Try integer
+			var iv int64
+			if _, err := fmt.Sscanf(s, "%d", &iv); err != nil || isFloatFormatted {
+				allInt = false
+			}
+			// Try float
+			var fv float64
+			if _, err := fmt.Sscanf(s, "%f", &fv); err != nil {
+				allFloat = false
+			}
+		}
+		if allInt {
+			ds.Columns[i].Kind = dataset.ColumnInteger
+		} else if allFloat {
+			ds.Columns[i].Kind = dataset.ColumnFloat
+		}
+	}
 }

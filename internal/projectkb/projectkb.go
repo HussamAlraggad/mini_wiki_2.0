@@ -167,6 +167,10 @@ type DB interface {
 	GetComparisonSnapshots(ctx context.Context, rankingID int64) ([]ComparisonSnapshot, error)
 	SaveDiscardEntry(ctx context.Context, d *DiscardEntry) error
 	GetDiscardEntries(ctx context.Context) ([]DiscardEntry, error)
+
+	// --- Active Dataset ---
+	SetActiveDataset(ctx context.Context, filePath, fileFormat string, rowCount int) error
+	GetActiveDataset(ctx context.Context) (string, string, error)
 }
 
 // New creates a new Project KB.
@@ -320,6 +324,14 @@ func (p *projectDB) migrate(ctx context.Context) error {
 			threshold       REAL NOT NULL,
 			rows_discarded  INTEGER NOT NULL DEFAULT 0,
 			created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		// Active ingested dataset tracking
+		`CREATE TABLE IF NOT EXISTS active_dataset (
+			id          INTEGER PRIMARY KEY AUTOINCREMENT,
+			file_path   TEXT NOT NULL,
+			file_format TEXT NOT NULL DEFAULT 'csv',
+			row_count   INTEGER NOT NULL DEFAULT 0,
+			created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 		)`,
 	}
 
@@ -809,4 +821,31 @@ func (p *projectDB) GetDiscardEntries(ctx context.Context) ([]DiscardEntry, erro
 		entries = append(entries, d)
 	}
 	return entries, rows.Err()
+}
+
+// --- Active Dataset ---
+
+func (p *projectDB) SetActiveDataset(ctx context.Context, filePath, fileFormat string, rowCount int) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	_, err := p.db.ExecContext(ctx, `DELETE FROM active_dataset`)
+	if err != nil {
+		return err
+	}
+	_, err = p.db.ExecContext(ctx,
+		`INSERT INTO active_dataset (file_path, file_format, row_count) VALUES (?, ?, ?)`,
+		filePath, fileFormat, rowCount)
+	return err
+}
+
+func (p *projectDB) GetActiveDataset(ctx context.Context) (string, string, error) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	var filePath, fileFormat string
+	err := p.db.QueryRowContext(ctx,
+		`SELECT file_path, file_format FROM active_dataset ORDER BY id DESC LIMIT 1`).Scan(&filePath, &fileFormat)
+	if err != nil {
+		return "", "", err
+	}
+	return filePath, fileFormat, nil
 }

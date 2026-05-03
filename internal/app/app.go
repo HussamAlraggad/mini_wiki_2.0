@@ -614,6 +614,17 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			a.appendToViewport(fmt.Sprintf("[RAG done] %s - %d chunks indexed", filepath.Base(msg.Path), msg.Chunks))
 			a.statusMsg = fmt.Sprintf("Indexed %d chunks", msg.Chunks)
+			// Register as active dataset for ranking
+			ext := strings.ToLower(filepath.Ext(msg.Path))
+			format := "txt"
+			if ext == ".csv" || ext == ".tsv" {
+				format = "csv"
+			} else if ext == ".jsonl" || ext == ".ndjson" || ext == ".json" {
+				format = "jsonl"
+			} else if ext == ".xlsx" {
+				format = "xlsx"
+			}
+			_ = a.pkb.SetActiveDataset(context.Background(), msg.Path, format, msg.Chunks)
 		}
 		return a, nil
 

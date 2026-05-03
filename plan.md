@@ -55,6 +55,7 @@ These rules apply to **every agent** working on this project:
 2. Read `journal.md` to understand what's been done, what broke, and current state.
 3. Read `AGENTS.md` for operational rules.
 4. If any instruction in this file conflicts with another file, this file wins.
+5. Keep the `README.m` file up to date.
 
 ### 2.2 While Working
 1. NEVER make assumptions about features not explicitly listed here.
