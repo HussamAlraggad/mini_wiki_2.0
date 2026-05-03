@@ -20,6 +20,9 @@ go.work.sum
 .DS_Store
 Thumbs.db
 
+# Virtual environment
+.venv/
+
 # Runtime / generated
 .wiki/
 rag_worker/__pycache__/

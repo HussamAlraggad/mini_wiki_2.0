@@ -2150,8 +2150,19 @@ func (a *Application) ensureRAGStarted() string {
 	if _, err := os.Stat(workerPath); err != nil {
 		return fmt.Sprintf("RAG worker not found at %s", workerPath)
 	}
+	// Check for project-level virtual environment first
+	rootDir := a.scanCfg.RootDir
+	var pythonCandidates []string
+	if rootDir != "" {
+		pythonCandidates = []string{
+			filepath.Join(rootDir, ".venv", "bin", "python3"),
+			filepath.Join(rootDir, ".venv", "bin", "python"),
+		}
+	}
+	pythonCandidates = append(pythonCandidates, "python3", "python")
+
 	var lastErr error
-	for _, python := range []string{"python3", "python"} {
+	for _, python := range pythonCandidates {
 		if err := a.ragClient.Start(python, workerPath, a.pkb.ProjectDir(), "nomic-embed-text", a.models.Active(), "http://127.0.0.1:11434"); err != nil {
 			lastErr = err
 			continue
