@@ -91,6 +91,33 @@ type FilterState struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// --- Ranking types ---
+
+// RankingResult stores the output of a /rank command.
+type RankingResult struct {
+	ID        int64     `json:"id"`
+	Topic     string    `json:"topic"`
+	Scores    string    `json:"scores"` // JSON blob of per-row scores
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// ComparisonSnapshot stores a /compare snapshot.
+type ComparisonSnapshot struct {
+	ID        int64     `json:"id"`
+	RankingID int64     `json:"ranking_id"`
+	Topic     string    `json:"topic"`
+	Scores    string    `json:"scores"` // JSON blob
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// DiscardEntry records a /discard operation.
+type DiscardEntry struct {
+	ID            int64     `json:"id"`
+	Threshold     float64   `json:"threshold"`
+	RowsDiscarded int       `json:"rows_discarded"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
 // DB is the per-directory project knowledge base interface.
 type DB interface {
 	// Open initializes the database (creates .wiki/ if needed).
@@ -132,6 +159,14 @@ type DB interface {
 	SaveFilterState(ctx context.Context, fs *FilterState) error
 	GetFilterStates(ctx context.Context) ([]FilterState, error)
 	DeleteFilterState(ctx context.Context, id int64) error
+
+	// --- Ranking ---
+	SaveRanking(ctx context.Context, r *RankingResult) error
+	GetRankings(ctx context.Context) ([]RankingResult, error)
+	SaveComparisonSnapshot(ctx context.Context, s *ComparisonSnapshot) error
+	GetComparisonSnapshots(ctx context.Context, rankingID int64) ([]ComparisonSnapshot, error)
+	SaveDiscardEntry(ctx context.Context, d *DiscardEntry) error
+	GetDiscardEntries(ctx context.Context) ([]DiscardEntry, error)
 }
 
 // New creates a new Project KB.
@@ -265,6 +300,26 @@ func (p *projectDB) migrate(ctx context.Context) error {
 			name        TEXT NOT NULL,
 			criteria    TEXT NOT NULL DEFAULT '{}',
 			created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		// Phase 4: Ranking tables
+		`CREATE TABLE IF NOT EXISTS ranking_results (
+			id          INTEGER PRIMARY KEY AUTOINCREMENT,
+			topic       TEXT NOT NULL,
+			scores      TEXT NOT NULL DEFAULT '[]',
+			created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`CREATE TABLE IF NOT EXISTS comparison_snapshots (
+			id          INTEGER PRIMARY KEY AUTOINCREMENT,
+			ranking_id  INTEGER NOT NULL REFERENCES ranking_results(id),
+			topic       TEXT NOT NULL,
+			scores      TEXT NOT NULL DEFAULT '[]',
+			created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`CREATE TABLE IF NOT EXISTS discard_history (
+			id              INTEGER PRIMARY KEY AUTOINCREMENT,
+			threshold       REAL NOT NULL,
+			rows_discarded  INTEGER NOT NULL DEFAULT 0,
+			created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 		)`,
 	}
 
@@ -647,4 +702,111 @@ func (p *projectDB) DeleteFilterState(ctx context.Context, id int64) error {
 	defer p.mu.Unlock()
 	_, err := p.db.ExecContext(ctx, `DELETE FROM filter_states WHERE id = ?`, id)
 	return err
+}
+
+// --- Ranking implementations ---
+
+func (p *projectDB) SaveRanking(ctx context.Context, r *RankingResult) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	res, err := p.db.ExecContext(ctx,
+		`INSERT INTO ranking_results (topic, scores) VALUES (?, ?)`,
+		r.Topic, r.Scores)
+	if err != nil {
+		return err
+	}
+	r.ID, _ = res.LastInsertId()
+	return nil
+}
+
+func (p *projectDB) GetRankings(ctx context.Context) ([]RankingResult, error) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	rows, err := p.db.QueryContext(ctx,
+		`SELECT id, topic, scores, created_at FROM ranking_results ORDER BY created_at DESC LIMIT 10`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []RankingResult
+	for rows.Next() {
+		var r RankingResult
+		var createdAt string
+		if err := rows.Scan(&r.ID, &r.Topic, &r.Scores, &createdAt); err != nil {
+			return nil, err
+		}
+		r.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", createdAt)
+		results = append(results, r)
+	}
+	return results, rows.Err()
+}
+
+func (p *projectDB) SaveComparisonSnapshot(ctx context.Context, s *ComparisonSnapshot) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	res, err := p.db.ExecContext(ctx,
+		`INSERT INTO comparison_snapshots (ranking_id, topic, scores) VALUES (?, ?, ?)`,
+		s.RankingID, s.Topic, s.Scores)
+	if err != nil {
+		return err
+	}
+	s.ID, _ = res.LastInsertId()
+	return nil
+}
+
+func (p *projectDB) GetComparisonSnapshots(ctx context.Context, rankingID int64) ([]ComparisonSnapshot, error) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	rows, err := p.db.QueryContext(ctx,
+		`SELECT id, ranking_id, topic, scores, created_at FROM comparison_snapshots WHERE ranking_id = ? ORDER BY created_at DESC`,
+		rankingID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var snaps []ComparisonSnapshot
+	for rows.Next() {
+		var s ComparisonSnapshot
+		var createdAt string
+		if err := rows.Scan(&s.ID, &s.RankingID, &s.Topic, &s.Scores, &createdAt); err != nil {
+			return nil, err
+		}
+		s.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", createdAt)
+		snaps = append(snaps, s)
+	}
+	return snaps, rows.Err()
+}
+
+func (p *projectDB) SaveDiscardEntry(ctx context.Context, d *DiscardEntry) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	_, err := p.db.ExecContext(ctx,
+		`INSERT INTO discard_history (threshold, rows_discarded) VALUES (?, ?)`,
+		d.Threshold, d.RowsDiscarded)
+	return err
+}
+
+func (p *projectDB) GetDiscardEntries(ctx context.Context) ([]DiscardEntry, error) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	rows, err := p.db.QueryContext(ctx,
+		`SELECT id, threshold, rows_discarded, created_at FROM discard_history ORDER BY created_at DESC LIMIT 10`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var entries []DiscardEntry
+	for rows.Next() {
+		var d DiscardEntry
+		var createdAt string
+		if err := rows.Scan(&d.ID, &d.Threshold, &d.RowsDiscarded, &createdAt); err != nil {
+			return nil, err
+		}
+		d.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", createdAt)
+		entries = append(entries, d)
+	}
+	return entries, rows.Err()
 }

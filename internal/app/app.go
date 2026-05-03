@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 	"mini-wiki/internal/ollama"
 	"mini-wiki/internal/projectkb"
 	"mini-wiki/internal/rag"
+	"mini-wiki/internal/ranking"
 	"mini-wiki/internal/srs"
 	"mini-wiki/internal/webfetch"
 
@@ -126,6 +128,21 @@ type (
 	TaskAddRequested   struct{ Text string }
 	TaskToggleRequested  struct{ Index int }
 	TaskListRequested   struct{}
+
+	// Phase 4: Ranking
+	RankRequested struct{ Topic string }
+	RankComplete struct {
+		Result *ranking.RankResult
+		Text   string
+	}
+	RankFailed      struct{ Err error }
+	CompareRequested struct{ Topic string }
+	DiscardRequested struct{ Threshold float64 }
+	DiscardPreview  struct {
+		Threshold float64
+		Keep      int
+		Discard   int
+	}
 )
 
 // --- Layout ---
@@ -603,6 +620,42 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case IngestFailed:
 		a.errMsg = fmt.Sprintf("Ingest failed: %v", msg.Err)
 		a.statusMsg = "Ingest failed"
+		return a, nil
+
+	// --- Ranking ---
+	case RankRequested:
+		a.busy = true
+		a.statusMsg = "Ranking dataset..."
+		return a, rankCmd(a, msg.Topic)
+
+	case RankComplete:
+		a.busy = false
+		a.appendToViewport(msg.Text)
+		// Save ranking to project KB
+		if msg.Result != nil {
+			_ = a.pkb.SaveRanking(context.Background(), &projectkb.RankingResult{
+				Topic:  msg.Result.Topic,
+				Scores: ranking.ResultsToJSON(msg.Result.Scores, msg.Result.Topic),
+			})
+		}
+		a.statusMsg = "Ranking complete"
+		return a, nil
+
+	case RankFailed:
+		a.busy = false
+		a.errMsg = fmt.Sprintf("Ranking failed: %v", msg.Err)
+		return a, nil
+
+	case CompareRequested:
+		// TODO: Implement comparison with previous ranking
+		a.appendToViewport("Comparison will compare current ranking with a previous one.")
+		a.statusMsg = "Compare"
+		return a, nil
+
+	case DiscardRequested:
+		// TODO: Implement discard with confirmation
+		a.appendToViewport(fmt.Sprintf("Discard at threshold %.2f -- implement confirmation flow.", msg.Threshold))
+		a.statusMsg = "Discard"
 		return a, nil
 
 	// --- Web fetching ---
@@ -1190,6 +1243,33 @@ Memory & RAG:
 
 	case "/srs":
 		return a, func() tea.Msg { return SRSRequested{} }
+
+	case "/rank":
+		if len(parts) < 2 {
+			a.errMsg = "Usage: /rank <topic>"
+			return a, nil
+		}
+		topic := strings.Join(parts[1:], " ")
+		return a, func() tea.Msg { return RankRequested{Topic: topic} }
+
+	case "/compare":
+		if len(parts) > 1 {
+			topic := strings.Join(parts[1:], " ")
+			return a, func() tea.Msg { return CompareRequested{Topic: topic} }
+		}
+		return a, func() tea.Msg { return CompareRequested{Topic: ""} }
+
+	case "/discard":
+		if len(parts) < 2 {
+			a.errMsg = "Usage: /discard <threshold>"
+			return a, nil
+		}
+		threshold, err := strconv.ParseFloat(parts[1], 64)
+		if err != nil || threshold < 0 || threshold > 1 {
+			a.errMsg = "Threshold must be a number between 0.0 and 1.0"
+			return a, nil
+		}
+		return a, func() tea.Msg { return DiscardRequested{Threshold: threshold} }
 
 	case "/cancel":
 		a.statusMsg = "Cancelling..."
@@ -1788,6 +1868,9 @@ var commandList = []suggestionItem{
 	{text: "/flaws", description: "Show known issues and solutions", category: "cmd"},
 	{text: "/task", description: "Add a todo task", category: "cmd"},
 	{text: "/tasks", description: "List all tasks", category: "cmd"},
+	{text: "/rank", description: "Rank dataset rows by relevance to topic", category: "cmd"},
+	{text: "/compare", description: "Compare rankings iteratively", category: "cmd"},
+	{text: "/discard", description: "Discard rows below relevance threshold", category: "cmd"},
 	{text: "/srs", description: "Run SRS generation pipeline", category: "cmd"},
 	{text: "/cancel", description: "Cancel current RAG operation", category: "cmd"},
 	{text: "/exit", description: "Quit the application", category: "cmd"},
@@ -2068,6 +2151,31 @@ func (a *srsLLMAdapter) Generate(ctx context.Context, model, prompt string) (str
 		return "", err
 	}
 	return resp.Response, nil
+}
+
+func rankCmd(a *Application, topic string) tea.Cmd {
+	return func() tea.Msg {
+		// Load the dataset from the project KB
+		// This is a placeholder -- Phase 4 needs LoadDataset to actually work
+		projectDir := a.pkb.ProjectDir()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		defer cancel()
+
+		ranker := ranking.NewRanker(&srsLLMAdapter{client: a.client}, ranking.DefaultConfig())
+		data, err := ranking.LoadDataset(projectDir)
+		if err != nil {
+			return RankFailed{Err: err}
+		}
+
+		result, err := ranker.ScoreAll(ctx, data, topic)
+		if err != nil {
+			return RankFailed{Err: err}
+		}
+
+		text := ranking.FormatRankingTable(result, 20)
+		return RankComplete{Result: result, Text: text}
+	}
 }
 
 func srsPipelineCmd(pipeline *srs.Pipeline, data string) tea.Cmd {

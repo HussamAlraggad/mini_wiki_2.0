@@ -8,12 +8,61 @@
 
 ---
 
+## May 3 -- Phase 4: Relevance Ranking (INPROGRESS)
+
+### What was done
+- Created `internal/dataset/` package with shared types: `Dataset`, `Row`, `Column`, `ColumnKind` with
+  `Filter()`, `Sort()`, `Select()`, `Head()`, `String()` methods (per plan.md section 12.1)
+- Created `dataset.Parser` interface and `AutoDetect()` function stub (section 12.5)
+- Added ranking tables to projectkb: `ranking_results`, `comparison_snapshots`, `discard_history`
+- Created `internal/ranking/` package with `Ranker` interface, `RankResult`, `ScoreAll()`, `Rerank()`
+- Implemented LLM-based scoring: each row is scored against a topic via prompt
+- Implemented `parseScore()` with edge case handling (non-numeric, clamped, embedded numbers)
+- Implemented `FormatRankingTable()` and `FormatComparison()` for display
+- Wired `/rank`, `/compare`, `/discard` commands into TUI with message types and handlers
+- Added all new commands to tab-completion command list
+- Wrote tests for dataset package (7 tests) and ranking package (8 tests)
+
+### Interface changes made
+- `internal/dataset/` package created as per plan.md section 12.1 contracts
+- DB interface in `internal/projectkb/` extended with ranking methods
+- `internal/ranking/` package created as per plan.md section 12.2-12.3 contracts
+
+### What I struggled with / broke
+- Dataset.Sort() had a bug in descending sort logic (wrong comparison direction). Fixed.
+- `strconv` import was missing from app.go initially, then placed in wrong import group
+- FormatRankingTable needed to properly handle the `relevance_score` column
+- FormatComparison had a syntax error (missing parenthesis) initially
+- The `/rank` command calls `ranking.LoadDataset()` which is NOT YET IMPLEMENTED (returns an error).
+  Phase 4 needs this function to actually query the project KB or ChromaDB for ingested data.
+
+### Test status
+```
+All tests pass (9 suites, 15 new tests).
+```
+
+### Handoff to next agent
+1. **The biggest gap:** `ranking.LoadDataset()` is a stub that returns an error.
+   The next agent implementing Phase 4 must make this function actually load the ingested
+   dataset from the project KB or ChromaDB. Until then, `/rank` will show:
+   "no dataset ingested. Use /ingest first."
+2. `/compare` and `/discard` are wired but have placeholder implementations.
+   `/compare` needs to load the previous ranking from the project KB and compare.
+   `/discard` needs a confirmation flow with `--preview` and `--reset` flags.
+3. The `srsLLMAdapter` is being reused for ranking LLM calls -- make sure it handles
+   the high volume of calls (one per row).
+4. For large datasets, `ScoreAll()` makes one LLM call per row. This is slow.
+   Consider batching or using a different prompt strategy.
+5. Tests for `internal/ranking/` use a mock LLM. Real LLM testing would need Ollama running.
+
+---
+
 ## Current Project State
 
 | Attribute | Value |
-|---|---|
-| **Project Phase** | Plan finalized, tool activated. Ready for Phase 4 implementation. |
-| **Last action** | May 3 -- plan.md rewritten with full specs + interface contracts. Tool built and installed. |
+|---|---|---|
+| **Project Phase** | Phase 4 started: internal/dataset/ + internal/ranking/ created, commands wired. |
+| **Last action** | May 3 -- Phase 4: Dataset + Ranking packages implemented. /rank, /compare, /discard wired into TUI. |
 | **Go version** | 1.25.0 |
 | **Ollama version** | 0.20.6 (running) |
 | **Active model** | `gemma4:e4b` (8B params, 131K ctx, Q4_K_M) |
