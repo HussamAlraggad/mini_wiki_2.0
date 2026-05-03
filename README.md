@@ -84,11 +84,12 @@ cp wiki ~/.local/bin/wiki
 
 ```
 1. /scan                    # List files in current directory
-2. /ingest @dataset.csv     # Ingest into RAG knowledge base
-3. Type questions            # Auto-RAG searches your data
-4. /rank "research topic"   # Score rows by relevance to topic
-5. /chart bar column=score  # Visualize the results
-6. /export --ranked          # Export ranked data to Excel
+2. /ingest @dataset.csv     # Parse file (seconds) — ready for /rank
+3. /rank "research topic"   # Score rows by relevance to topic
+4. /chart bar column=score  # Visualize the results
+5. /export --ranked          # Export ranked data to Excel
+6. /embed                    # (Optional) Index for RAG search — takes hours
+7. Type questions            # Auto-RAG searches your data if embedded
 ```
 
 ---
@@ -101,7 +102,8 @@ cp wiki ~/.local/bin/wiki
 |---|---|
 | `/scan` | Scan current directory for files |
 | `/files` | List scanned files |
-| `/ingest @file` | Ingest file into RAG knowledge base |
+| `/ingest @file` | Parse file and register as active dataset (seconds) |
+| `/embed` | Embed active dataset for RAG search (slow, background) |
 | `/infer @file` | Auto-detect file format |
 
 ### Chat & RAG
