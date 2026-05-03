@@ -95,7 +95,11 @@ type (
 	FetchFailed     struct{ Err error }
 
 	// Phase 3: Export
-	ExportRequested struct{}
+	ExportRequested struct {
+		Ranked bool
+		Format string // "xlsx", "csv", "json"
+		Output string
+	}
 	ExportComplete  struct {
 		Result *export.ExportResult
 	}
@@ -774,18 +778,24 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// --- Export ---
 	case ExportRequested:
+		a.busy = true
 		a.statusMsg = "Exporting data..."
-		return a, exportCmd(a.exporter, a.thread, a.exportCfg)
+		if msg.Ranked && a.currentRank != nil {
+			return a, exportRankedCmd(a, msg)
+		}
+		return a, exportCmd(a.exporter, a.thread, a.exportCfg, msg)
 
 	case ExportComplete:
+		a.busy = false
 		r := msg.Result
 		summary := fmt.Sprintf("Exported %d rows to %s (%s, %s)",
 			r.Rows, r.FileName, humanBytes(r.Size), r.Duration.Round(time.Millisecond))
-		a.appendToViewport(helpStyle.Render(summary))
+		a.appendToViewport(summary)
 		a.statusMsg = "Export complete"
 		return a, nil
 
 	case ExportFailed:
+		a.busy = false
 		a.errMsg = fmt.Sprintf("Export failed: %v", msg.Err)
 		a.statusMsg = "Export failed"
 		return a, nil
@@ -1321,7 +1331,21 @@ Memory & RAG:
 		return a, func() tea.Msg { return FetchRequested{URL: parts[1]} }
 
 	case "/export":
-		return a, func() tea.Msg { return ExportRequested{} }
+		ranked := false
+		format := "xlsx"
+		output := ""
+		for _, p := range parts {
+			if p == "--ranked" {
+				ranked = true
+			} else if strings.HasPrefix(p, "--format=") {
+				format = strings.TrimPrefix(p, "--format=")
+			} else if strings.HasPrefix(p, "--output=") {
+				output = strings.TrimPrefix(p, "--output=")
+			}
+		}
+		return a, func() tea.Msg {
+			return ExportRequested{Ranked: ranked, Format: format, Output: output}
+		}
 
 	case "/bookmark":
 		if len(parts) < 2 {
@@ -1405,6 +1429,21 @@ Memory & RAG:
 			return a, nil
 		}
 		return a, func() tea.Msg { return DiscardRequested{Threshold: threshold} }
+
+	case "/infer":
+		if len(parts) < 2 {
+			a.errMsg = "Usage: /infer <filename>"
+			return a, nil
+		}
+		filename := strings.TrimPrefix(parts[1], "@")
+		format := dataset.AutoDetect(filename)
+		if format == "" {
+			a.appendToViewport(fmt.Sprintf("Cannot detect format for %s", filename))
+		} else {
+			a.appendToViewport(fmt.Sprintf("Detected: %s", dataset.DetectFormat(filename)))
+			a.appendToViewport(fmt.Sprintf("Try: /ingest @%s", filename))
+		}
+		return a, nil
 
 	case "/chart":
 		if len(parts) < 2 {
@@ -1969,18 +2008,23 @@ func fetchCmd(f webfetch.Fetcher, rawURL string, cfg webfetch.FetcherConfig) tea
 	}
 }
 
-func exportCmd(e export.Exporter, thread *conversation.Thread, cfg export.ExportConfig) tea.Cmd {
+func exportCmd(e export.Exporter, thread *conversation.Thread, cfg export.ExportConfig, msg ExportRequested) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		// Build export data from conversation thread
+		// Apply request settings
+		cfg.Format = msg.Format
+		if msg.Output != "" {
+			cfg.FileName = msg.Output
+		}
+
 		rows := make([]export.Row, 0, len(thread.Messages))
-		for _, msg := range thread.Messages {
+		for _, m := range thread.Messages {
 			rows = append(rows, export.Row{
-				string(msg.Role),
-				msg.Content,
-				msg.Timestamp.Format(time.RFC3339),
+				string(m.Role),
+				m.Content,
+				m.Timestamp.Format(time.RFC3339),
 			})
 		}
 
@@ -1995,6 +2039,55 @@ func exportCmd(e export.Exporter, thread *conversation.Thread, cfg export.Export
 		}
 
 		result, err := e.Export(ctx, data, cfg)
+		if err != nil {
+			return ExportFailed{Err: err}
+		}
+		return ExportComplete{Result: result}
+	}
+}
+
+func exportRankedCmd(a *Application, msg ExportRequested) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		cfg := a.exportCfg
+		cfg.Format = msg.Format
+		if msg.Output != "" {
+			cfg.FileName = msg.Output
+		}
+
+		if a.currentRank == nil || a.currentRank.Dataset == nil {
+			return ExportFailed{Err: fmt.Errorf("no ranked data available. Run /rank first.")}
+		}
+
+		ds := a.currentRank.Dataset
+		cols := make([]export.ColumnDef, len(ds.Columns))
+		for i, c := range ds.Columns {
+			t := "text"
+			if c.Kind == dataset.ColumnInteger || c.Kind == dataset.ColumnFloat {
+				t = "number"
+			}
+			cols[i] = export.ColumnDef{Name: c.Name, Type: t, Width: 15}
+		}
+
+		rows := make([]export.Row, len(ds.Rows))
+		for i, r := range ds.Rows {
+			row := make(export.Row, len(ds.Columns))
+			for j, c := range ds.Columns {
+				val := fmt.Sprintf("%v", r.Data[c.Name])
+				row[j] = val
+			}
+			rows[i] = row
+		}
+
+		data := &export.ExportData{
+			SheetName: "RankedData",
+			Columns:   cols,
+			Rows:      rows,
+		}
+
+		result, err := a.exporter.Export(ctx, data, cfg)
 		if err != nil {
 			return ExportFailed{Err: err}
 		}
@@ -2035,6 +2128,7 @@ var commandList = []suggestionItem{
 	{text: "/compare", description: "Compare rankings iteratively", category: "cmd"},
 	{text: "/discard", description: "Discard rows below relevance threshold", category: "cmd"},
 	{text: "/chart", description: "Generate chart (bar, trend, pie, scatter, histogram, box, heatmap)", category: "cmd"},
+	{text: "/infer", description: "Auto-detect file format", category: "cmd"},
 	{text: "/srs", description: "Run SRS generation pipeline", category: "cmd"},
 	{text: "/cancel", description: "Cancel current RAG operation", category: "cmd"},
 	{text: "/exit", description: "Quit the application", category: "cmd"},

@@ -6,6 +6,7 @@ package dataset
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 )
@@ -239,10 +240,78 @@ type Parser interface {
 	Format() string
 }
 
-// AutoDetect reads the file extension and returns the matching parser.
-// If unknown, returns nil.
-func AutoDetect(path string) Parser {
-	// Magic byte detection could be added here
-	// For now, uses extension-based detection
-	return nil
+// AutoDetect reads the file extension and magic bytes to detect format.
+// Returns a parser name string ("csv", "jsonl", "json", "xlsx", "ods", "txt")
+// or empty string if unknown.
+func AutoDetect(path string) string {
+	// Check extension-based detection
+	ext := strings.ToLower(AutoExt(path))
+	switch ext {
+	case ".csv", ".tsv":
+		return "csv"
+	case ".jsonl", ".ndjson", ".jsonlines":
+		return "jsonl"
+	case ".json":
+		// Check if it's JSONL or JSON array by reading first bytes
+		if isJSONArray(path) {
+			return "json"
+		}
+		return "jsonl" // treat as JSONL by default
+	case ".xlsx":
+		return "xlsx"
+	case ".ods":
+		return "ods"
+	case ".txt", ".md", ".markdown", ".yaml", ".yml", ".toml", ".xml", ".html":
+		return "txt"
+	}
+	return ""
+}
+
+// AutoExt returns the file extension in lowercase.
+func AutoExt(path string) string {
+	ext := ""
+	for i := len(path) - 1; i >= 0; i-- {
+		if path[i] == '.' {
+			ext = path[i:]
+			break
+		}
+	}
+	return strings.ToLower(ext)
+}
+
+// isJSONArray checks if the file looks like a JSON array (starts with '[').
+func isJSONArray(path string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil || len(data) == 0 {
+		return false
+	}
+	// Skip whitespace
+	for _, b := range data {
+		if b == ' ' || b == '\t' || b == '\n' || b == '\r' {
+			continue
+		}
+		return b == '['
+	}
+	return false
+}
+
+// DetectFormat returns a human-readable description of the file format.
+func DetectFormat(path string) string {
+	format := AutoDetect(path)
+	switch format {
+	case "csv":
+		return "CSV (comma-separated values)"
+	case "jsonl":
+		return "JSONL (JSON lines)"
+	case "json":
+		return "JSON array"
+	case "xlsx":
+		return "Excel (.xlsx)"
+	case "ods":
+		return "LibreOffice Calc (.ods)"
+	case "txt":
+		return "Text file"
+	default:
+		return "Unknown format"
+	}
 }

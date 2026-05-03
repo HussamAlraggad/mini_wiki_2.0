@@ -1,10 +1,12 @@
-// Package export provides tabular data export to Excel (.xlsx) format
-// with streaming support, type-aware column formatting, and formula injection
-// protection.
+// Package export provides tabular data export to Excel (.xlsx), CSV, and JSON formats
+// with type-aware column formatting and formula injection protection.
 package export
 
 import (
+	"bytes"
 	"context"
+	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -21,7 +23,7 @@ type ColumnDef struct {
 	Width int   // 0 = auto
 }
 
-// Row represents a single exported row (positional values matching ColumnDef order).
+// Row represents a single exported row (positional values).
 type Row []string
 
 // ExportData holds the complete data to export.
@@ -41,13 +43,15 @@ type SheetDef struct {
 type ExportConfig struct {
 	OutputDir string // defaults to CWD
 	FileName  string // defaults to auto-generated name
-	Overwrite bool   // overwrite existing file
+	Format    string // "xlsx", "csv", "json" (default: xlsx)
+	Overwrite bool
 }
 
 // DefaultConfig returns sensible export defaults.
 func DefaultConfig() ExportConfig {
 	return ExportConfig{
 		OutputDir: ".",
+		Format:    "xlsx",
 	}
 }
 
@@ -59,23 +63,24 @@ type ExportResult struct {
 	Sheets   int
 	Rows     int
 	Duration time.Duration
+	Format   string
 }
 
 // GenerateFileName creates a timestamped filename.
-func GenerateFileName(prefix string) string {
+func GenerateFileName(prefix, ext string) string {
 	ts := time.Now().Format("20060102_150405")
 	if prefix == "" {
 		prefix = "export"
 	}
-	return fmt.Sprintf("%s_%s.xlsx", prefix, ts)
+	if ext == "" {
+		ext = "xlsx"
+	}
+	return fmt.Sprintf("%s_%s.%s", prefix, ts, ext)
 }
 
 // Exporter is the tabular export interface.
 type Exporter interface {
-	// Export writes a complete dataset to an .xlsx file.
 	Export(ctx context.Context, data *ExportData, cfg ExportConfig) (*ExportResult, error)
-
-	// ExportStream writes data row-by-row from a channel (memory efficient).
 	ExportStream(ctx context.Context, sheets []SheetDef, rows <-chan Row, cfg ExportConfig) (*ExportResult, error)
 }
 
@@ -89,7 +94,6 @@ type exporter struct{}
 // formulaPrefixes are Excel formula injection indicators.
 var formulaPrefixes = []string{"=", "+", "-", "@", "\t=", "\t+", "\t-", "\t@"}
 
-// sanitizeCell prevents formula injection by prefixing with apostrophe.
 func sanitizeCell(value string) string {
 	for _, prefix := range formulaPrefixes {
 		if strings.HasPrefix(value, prefix) {
@@ -100,14 +104,36 @@ func sanitizeCell(value string) string {
 }
 
 func (e *exporter) Export(ctx context.Context, data *ExportData, cfg ExportConfig) (*ExportResult, error) {
-	start := time.Now()
-
-	if data == nil {
+	if data == nil || len(data.Rows) == 0 {
 		return nil, fmt.Errorf("no data to export")
 	}
-	if len(data.Rows) == 0 {
-		return nil, fmt.Errorf("no rows to export")
+
+	format := strings.ToLower(cfg.Format)
+	if format == "" {
+		format = "xlsx"
 	}
+
+	var result *ExportResult
+	var err error
+
+	switch format {
+	case "csv":
+		result, err = e.exportCSV(ctx, data, cfg)
+	case "json":
+		result, err = e.exportJSON(ctx, data, cfg)
+	default:
+		result, err = e.exportXLSX(ctx, data, cfg)
+	}
+
+	if err != nil {
+		return nil, err
+	}
+	result.Format = format
+	return result, nil
+}
+
+func (e *exporter) exportXLSX(ctx context.Context, data *ExportData, cfg ExportConfig) (*ExportResult, error) {
+	start := time.Now()
 
 	sheetName := data.SheetName
 	if sheetName == "" {
@@ -117,43 +143,37 @@ func (e *exporter) Export(ctx context.Context, data *ExportData, cfg ExportConfi
 	f := excelize.NewFile()
 	defer f.Close()
 
-	// Rename default sheet
-	idx, err := f.GetSheetIndex("Sheet1")
-	if err == nil && idx >= 0 {
+	idx, _ := f.GetSheetIndex("Sheet1")
+	if idx >= 0 {
 		f.SetSheetName("Sheet1", sheetName)
 	}
 
-	// Write header row
-	headers := make([]string, len(data.Columns))
-	for i, col := range data.Columns {
-		headers[i] = col.Name
-	}
-	for j, h := range headers {
+	// Header
+	for j, col := range data.Columns {
 		cell, _ := excelize.CoordinatesToCellName(j+1, 1)
-		f.SetCellValue(sheetName, cell, h)
+		f.SetCellValue(sheetName, cell, col.Name)
 	}
 
-	// Write data rows
+	// Data rows
 	for i, row := range data.Rows {
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		default:
 		}
-		for j, val := range row {
+		for j := range row {
 			if j >= len(data.Columns) {
 				break
 			}
-			cell, _ := excelize.CoordinatesToCellName(j+1, i+2) // +2 for header offset
-			f.SetCellValue(sheetName, cell, sanitizeCell(val))
+			cell, _ := excelize.CoordinatesToCellName(j+1, i+2)
+			f.SetCellValue(sheetName, cell, sanitizeCell(row[j]))
 		}
 	}
 
-	// Auto-width columns
+	// Auto-width
 	for j, col := range data.Columns {
 		width := col.Width
 		if width <= 0 {
-			// Estimate from header
 			width = len(col.Name) + 2
 			if width < 10 {
 				width = 10
@@ -162,21 +182,19 @@ func (e *exporter) Export(ctx context.Context, data *ExportData, cfg ExportConfi
 				width = 50
 			}
 		}
-		cell, _ := excelize.CoordinatesToCellName(j+1, 1)
-		f.SetColWidth(sheetName, strings.Split(cell, "1")[0], strings.Split(cell, "1")[0], float64(width))
+		colLetter := string(rune('A' + j))
+		f.SetColWidth(sheetName, colLetter, colLetter, float64(width))
 	}
 
-	// Resolve output path
 	fileName := cfg.FileName
 	if fileName == "" {
-		fileName = GenerateFileName("export")
+		fileName = GenerateFileName("export", "xlsx")
 	}
 	if filepath.Ext(fileName) == "" {
 		fileName += ".xlsx"
 	}
 	outputPath := filepath.Join(cfg.OutputDir, fileName)
 
-	// Save to buffer then write atomically
 	buf, err := f.WriteToBuffer()
 	if err != nil {
 		return nil, fmt.Errorf("write buffer: %w", err)
@@ -195,89 +213,47 @@ func (e *exporter) Export(ctx context.Context, data *ExportData, cfg ExportConfi
 	}, nil
 }
 
-func (e *exporter) ExportStream(ctx context.Context, sheets []SheetDef, rows <-chan Row, cfg ExportConfig) (*ExportResult, error) {
+func (e *exporter) exportCSV(ctx context.Context, data *ExportData, cfg ExportConfig) (*ExportResult, error) {
 	start := time.Now()
 
-	if len(sheets) == 0 {
-		return nil, fmt.Errorf("at least one sheet definition required")
-	}
+	var buf bytes.Buffer
+	writer := csv.NewWriter(&buf)
 
-	f := excelize.NewFile()
-	defer f.Close()
-
-	// Set up first sheet
-	sheetName := sheets[0].Name
-	if sheetName == "" {
-		sheetName = "Sheet1"
+	// Header
+	headers := make([]string, len(data.Columns))
+	for i, col := range data.Columns {
+		headers[i] = col.Name
 	}
-	idx, err := f.GetSheetIndex("Sheet1")
-	if err == nil && idx >= 0 {
-		f.SetSheetName("Sheet1", sheetName)
-	}
+	writer.Write(headers)
 
-	// Add additional sheets
-	for i := 1; i < len(sheets); i++ {
-		name := sheets[i].Name
-		if name == "" {
-			name = fmt.Sprintf("Sheet%d", i+1)
-		}
-		f.NewSheet(name)
-	}
-
-	// Write headers for each sheet
-	for _, sheet := range sheets {
-		for j, col := range sheet.Columns {
-			cell, _ := excelize.CoordinatesToCellName(j+1, 1)
-			f.SetCellValue(sheet.Name, cell, col.Name)
-		}
-	}
-
-	// Stream rows into the first sheet
-	rowNum := 2 // after header
-	totalRows := 0
-	for row := range rows {
+	// Data rows
+	for _, row := range data.Rows {
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		default:
 		}
-		for j, val := range row {
-			cell, _ := excelize.CoordinatesToCellName(j+1, rowNum)
-			f.SetCellValue(sheetName, cell, sanitizeCell(val))
+		sanitized := make([]string, len(row))
+		for i, v := range row {
+			sanitized[i] = sanitizeCell(v)
 		}
-		rowNum++
-		totalRows++
+		writer.Write(sanitized)
 	}
+	writer.Flush()
 
-	// Auto-width columns for first sheet
-	for j, col := range sheets[0].Columns {
-		width := col.Width
-		if width <= 0 {
-			width = len(col.Name) + 2
-			if width < 10 {
-				width = 10
-			}
-			if width > 50 {
-				width = 50
-			}
-		}
-		cell, _ := excelize.CoordinatesToCellName(j+1, 1)
-		f.SetColWidth(sheetName, strings.Split(cell, "1")[0], strings.Split(cell, "1")[0], float64(width))
+	if err := writer.Error(); err != nil {
+		return nil, fmt.Errorf("csv write: %w", err)
 	}
 
 	fileName := cfg.FileName
 	if fileName == "" {
-		fileName = GenerateFileName("export")
+		fileName = GenerateFileName("export", "csv")
 	}
 	if filepath.Ext(fileName) == "" {
-		fileName += ".xlsx"
+		fileName += ".csv"
 	}
 	outputPath := filepath.Join(cfg.OutputDir, fileName)
 
-	buf, err := f.WriteToBuffer()
-	if err != nil {
-		return nil, fmt.Errorf("write buffer: %w", err)
-	}
 	if err := os.WriteFile(outputPath, buf.Bytes(), 0600); err != nil {
 		return nil, fmt.Errorf("write file: %w", err)
 	}
@@ -286,7 +262,109 @@ func (e *exporter) ExportStream(ctx context.Context, sheets []SheetDef, rows <-c
 		Path:     outputPath,
 		FileName: fileName,
 		Size:     int64(buf.Len()),
-		Sheets:   len(sheets),
+		Rows:     len(data.Rows),
+		Duration: time.Since(start),
+	}, nil
+}
+
+func (e *exporter) exportJSON(ctx context.Context, data *ExportData, cfg ExportConfig) (*ExportResult, error) {
+	start := time.Now()
+
+	// Build array of objects
+	var records []map[string]interface{}
+	for _, row := range data.Rows {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+		rec := make(map[string]interface{})
+		for j, val := range row {
+			if j < len(data.Columns) {
+				rec[data.Columns[j].Name] = sanitizeCell(val)
+			}
+		}
+		records = append(records, rec)
+	}
+
+	jsonData, err := json.MarshalIndent(records, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("json marshal: %w", err)
+	}
+
+	fileName := cfg.FileName
+	if fileName == "" {
+		fileName = GenerateFileName("export", "json")
+	}
+	if filepath.Ext(fileName) == "" {
+		fileName += ".json"
+	}
+	outputPath := filepath.Join(cfg.OutputDir, fileName)
+
+	if err := os.WriteFile(outputPath, jsonData, 0600); err != nil {
+		return nil, fmt.Errorf("write file: %w", err)
+	}
+
+	return &ExportResult{
+		Path:     outputPath,
+		FileName: fileName,
+		Size:     int64(len(jsonData)),
+		Rows:     len(data.Rows),
+		Duration: time.Since(start),
+	}, nil
+}
+
+func (e *exporter) ExportStream(ctx context.Context, sheets []SheetDef, rows <-chan Row, cfg ExportConfig) (*ExportResult, error) {
+	// For streaming, default to CSV (simplest streaming format)
+	if cfg.Format == "" || cfg.Format == "xlsx" {
+		cfg.Format = "csv"
+	}
+
+	if len(sheets) == 0 {
+		return nil, fmt.Errorf("at least one sheet definition required")
+	}
+
+	start := time.Now()
+	var buf bytes.Buffer
+	writer := csv.NewWriter(&buf)
+
+	// Headers
+	headers := make([]string, len(sheets[0].Columns))
+	for i, col := range sheets[0].Columns {
+		headers[i] = col.Name
+	}
+	writer.Write(headers)
+
+	totalRows := 0
+	for row := range rows {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+		sanitized := make([]string, len(row))
+		for i, v := range row {
+			sanitized[i] = sanitizeCell(v)
+		}
+		writer.Write(sanitized)
+		totalRows++
+	}
+	writer.Flush()
+
+	fileName := cfg.FileName
+	if fileName == "" {
+		fileName = GenerateFileName("export", "csv")
+	}
+	outputPath := filepath.Join(cfg.OutputDir, fileName)
+
+	if err := os.WriteFile(outputPath, buf.Bytes(), 0600); err != nil {
+		return nil, fmt.Errorf("write file: %w", err)
+	}
+
+	return &ExportResult{
+		Path:     outputPath,
+		FileName: fileName,
+		Size:     int64(buf.Len()),
 		Rows:     totalRows,
 		Duration: time.Since(start),
 	}, nil

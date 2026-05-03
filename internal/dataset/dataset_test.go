@@ -132,10 +132,25 @@ func TestDataset_String(t *testing.T) {
 	}
 }
 
-func TestAutoDetect_ReturnsNil(t *testing.T) {
-	parser := AutoDetect("test.csv")
-	if parser != nil {
-		t.Error("AutoDetect should return nil (not implemented yet)")
+func TestAutoDetect(t *testing.T) {
+	tests := []struct {
+		path string
+		want string
+	}{
+		{"data.csv", "csv"},
+		{"data.tsv", "csv"},
+		{"data.jsonl", "jsonl"},
+		{"data.ndjson", "jsonl"},
+		{"data.xlsx", "xlsx"},
+		{"data.ods", "ods"},
+		{"data.txt", "txt"},
+		{"file.md", "txt"},
+		{"data.unknown", ""},
+	}
+	for _, tt := range tests {
+		if got := AutoDetect(tt.path); got != tt.want {
+			t.Errorf("AutoDetect(%q) = %q, want %q", tt.path, got, tt.want)
+		}
 	}
 }
 
