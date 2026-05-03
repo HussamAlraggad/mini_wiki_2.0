@@ -4,6 +4,7 @@
 package app
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"os"
@@ -13,9 +14,9 @@ import (
 	"strings"
 	"time"
 
+	"mini-wiki/internal/chart"
 	"mini-wiki/internal/config"
 	"mini-wiki/internal/conversation"
-	"mini-wiki/internal/chart"
 	"mini-wiki/internal/csvparser"
 	"mini-wiki/internal/dataset"
 	"mini-wiki/internal/export"
@@ -81,6 +82,7 @@ type (
 		Path string
 		Err  error
 	}
+	IngestCompleteMsg struct{ Text string }
 	RAGProgressMsg struct{ Text string }
 	RAGDone struct {
 		Path     string
@@ -88,6 +90,7 @@ type (
 		Error    string
 		Progress []string
 	}
+	EmbedRequested struct{}
 
 	// Phase 3: Web fetching
 	FetchRequested  struct{ URL string }
@@ -625,29 +628,21 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.appendToViewport(formatFileTree(a.fileIndex))
 		return a, nil
 
-	// --- File ingestion ---
+	// --- File ingestion (fast: parse + register, no embeddings) ---
 	case IngestRequested:
 		a.busy = true
 		path := msg.Path
-		a.statusMsg = fmt.Sprintf("Indexing %s...", filepath.Base(path))
-		a.appendToViewport(fmt.Sprintf("=== Starting RAG ingest: %s ===\n", filepath.Base(path)))
-		// Start ingest in a goroutine that streams progress via program.Send
-		go a.ingestStream(path)
-		return a, nil
-
-	case RAGProgressMsg:
-		a.appendToViewport(fmt.Sprintf("  %s", msg.Text))
-		a.statusMsg = msg.Text
-		return a, nil
+		a.statusMsg = fmt.Sprintf("Parsing %s...", filepath.Base(path))
+		return a, ingestLocalCmd(a, path)
 
 	case RAGDone:
 		a.busy = false
 		if msg.Error != "" {
-			a.appendToViewport(fmt.Sprintf("[RAG error] %s", msg.Error))
-			a.statusMsg = "RAG error"
-		} else {
-			a.appendToViewport(fmt.Sprintf("[RAG done] %s - %d chunks indexed\n", filepath.Base(msg.Path), msg.Chunks))
-			a.statusMsg = fmt.Sprintf("Indexed %d chunks", msg.Chunks)
+			a.appendToViewport(fmt.Sprintf("[Error] %s", msg.Error))
+			a.statusMsg = "Error"
+		} else if msg.Chunks > 0 {
+			a.appendToViewport(fmt.Sprintf("[Embed done] %d chunks indexed for RAG search\n", msg.Chunks))
+			a.statusMsg = fmt.Sprintf("Embedded %d chunks", msg.Chunks)
 			// Register as active dataset for ranking
 			ext := strings.ToLower(filepath.Ext(msg.Path))
 			format := "txt"
@@ -665,6 +660,31 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case IngestFailed:
 		a.errMsg = fmt.Sprintf("Ingest failed: %v", msg.Err)
 		a.statusMsg = "Ingest failed"
+		return a, nil
+
+	case IngestCompleteMsg:
+		a.busy = false
+		a.appendToViewport(msg.Text)
+		a.statusMsg = "Ingest complete"
+		return a, nil
+
+	case RAGProgressMsg:
+		a.appendToViewport(fmt.Sprintf("  %s", msg.Text))
+		a.statusMsg = msg.Text
+		return a, nil
+
+	case EmbedRequested:
+		a.busy = true
+		a.statusMsg = "Starting embedding..."
+		a.appendToViewport("=== Starting embedding for RAG search ===\n")
+		// Get active dataset path
+		filePath, _, err := a.pkb.GetActiveDataset(context.Background())
+		if err != nil {
+			a.busy = false
+			a.errMsg = "No dataset ingested. Run /ingest first."
+			return a, nil
+		}
+		go a.embedStream(filePath)
 		return a, nil
 
 	// --- Ranking ---
@@ -1474,6 +1494,9 @@ Memory & RAG:
 		}
 		return a, nil
 
+	case "/embed":
+		return a, func() tea.Msg { return EmbedRequested{} }
+
 	case "/chart":
 		if len(parts) < 2 {
 			a.errMsg = "Usage: /chart <type> [options]"
@@ -2239,6 +2262,7 @@ var commandList = []suggestionItem{
 	{text: "/discard", description: "Discard rows below relevance threshold", category: "cmd"},
 	{text: "/chart", description: "Generate chart (bar, trend, pie, scatter, histogram, box, heatmap)", category: "cmd"},
 	{text: "/infer", description: "Auto-detect file format", category: "cmd"},
+	{text: "/embed", description: "Embed active dataset for RAG search (slow)", category: "cmd"},
 	{text: "/wizard", description: "Run system check and setup assistant", category: "cmd"},
 	{text: "/srs", description: "Run SRS generation pipeline", category: "cmd"},
 	{text: "/cancel", description: "Cancel current RAG operation", category: "cmd"},
@@ -2751,39 +2775,81 @@ func (a *Application) queryRAG(question string, topK int) (*rag.QueryResult, err
 	return a.ragClient.Query(question, topK)
 }
 
-// ingestStream runs the RAG ingest in a goroutine, streaming progress via program.Send.
-func (a *Application) ingestStream(path string) {
+// ingestLocalCmd parses a file locally and registers it as the active dataset (fast, no embeddings).
+func ingestLocalCmd(a *Application, path string) tea.Cmd {
+	return func() tea.Msg {
+		rootDir := a.scanCfg.RootDir
+		if rootDir == "" {
+			rootDir, _ = os.Getwd()
+		}
+		absPath, err := fileref.SafeResolve(rootDir, path)
+		if err != nil {
+			return IngestFailed{Path: path, Err: err}
+		}
+
+		// Detect format by extension
+		ext := strings.ToLower(filepath.Ext(absPath))
+		format := "txt"
+		if ext == ".csv" || ext == ".tsv" {
+			format = "csv"
+		} else if ext == ".jsonl" || ext == ".ndjson" || ext == ".json" {
+			format = "jsonl"
+		}
+
+		// Count rows by reading through the file
+		rowCount := countFileRows(absPath, format)
+		_ = a.pkb.SetActiveDataset(context.Background(), absPath, format, rowCount)
+
+		msg := fmt.Sprintf("Ingested %s — %d rows. Ready for /rank.\n  Run /embed to enable RAG search (optional, will take hours).",
+			filepath.Base(absPath), rowCount)
+		return IngestCompleteMsg{Text: msg}
+	}
+}
+
+// countFileRows quickly counts the number of rows in a file without parsing fully.
+func countFileRows(path, format string) int {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0
+	}
+	defer f.Close()
+
+	count := 0
+	scanner := bufio.NewScanner(f)
+	if format == "jsonl" || format == "csv" || format == "txt" {
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line != "" {
+				count++
+			}
+		}
+	}
+	if count == 0 {
+		count = 1
+	}
+	return count
+}
+
+// embedStream runs the RAG embedder in a goroutine (for /embed command).
+func (a *Application) embedStream(filePath string) {
 	p := a.program
 	if p == nil {
 		return
 	}
 
-	rootDir := a.scanCfg.RootDir
-	if rootDir == "" {
-		rootDir, _ = os.Getwd()
-	}
-
-	absPath, err := fileref.SafeResolve(rootDir, path)
-	if err != nil {
-		p.Send(RAGDone{Path: path, Error: err.Error()})
-		return
-	}
-
 	if errMsg := a.ensureRAGStarted(); errMsg != "" {
-		p.Send(RAGDone{Path: path, Error: errMsg})
+		p.Send(RAGDone{Path: filePath, Error: errMsg})
 		return
 	}
 
-	// Run ingest with real-time progress via callback
-	chunks, err := a.ragClient.IngestStream(absPath, "nomic-embed-text", func(msg string) {
+	chunks, err := a.ragClient.IngestStream(filePath, "nomic-embed-text", func(msg string) {
 		p.Send(RAGProgressMsg{Text: msg})
 	})
 	if err != nil {
-		p.Send(RAGDone{Path: path, Error: err.Error()})
+		p.Send(RAGDone{Path: filePath, Error: err.Error()})
 		return
 	}
-
-	p.Send(RAGDone{Path: absPath, Chunks: chunks})
+	p.Send(RAGDone{Path: filePath, Chunks: chunks})
 }
 
 // Update the skills to mark SRS skills as implemented.
