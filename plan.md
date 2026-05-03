@@ -527,7 +527,7 @@ If terminal is too narrow (< 40 cols), show: `Terminal too narrow for chart disp
 - [x] Global tool memory (`~/.config/mini-wiki/memory/`)
 - [x] TUI commands: `/bookmark`, `/bookmarks`, `/history`, `/skills`, `/flaws`
 
-### Phase 4: Relevance Ranking & Iterative Comparison (PLANNED)
+### Phase 4: Relevance Ranking & Iterative Comparison (COMPLETE)
 
 **Package:** New: `internal/ranking/`
 
@@ -541,7 +541,7 @@ If terminal is too narrow (< 40 cols), show: `Terminal too narrow for chart disp
 
 **Detailed spec:** See [section 8](#8-relevance-ranking--iterative-comparison).
 
-### Phase 5: Data Visualization (PLANNED)
+### Phase 5: Data Visualization (COMPLETE)
 
 **Package:** New: `internal/chart/`
 
@@ -558,7 +558,7 @@ If terminal is too narrow (< 40 cols), show: `Terminal too narrow for chart disp
 
 **Detailed spec:** See [section 9](#9-data-visualization).
 
-### Phase 6: Smart Export & Multi-Format Support (PLANNED)
+### Phase 6: Smart Export & Multi-Format Support (COMPLETE)
 
 **Package:** Existing: `internal/export/`, New: `internal/xlsxparser/`, `internal/odsparser/`
 
@@ -573,7 +573,7 @@ If terminal is too narrow (< 40 cols), show: `Terminal too narrow for chart disp
 
 **Detailed spec:** See [section 10](#10-smart-export--output-generation).
 
-### Phase 7: Remaining Features (PLANNED)
+### Phase 7: Remaining Features (COMPLETE)
 
 **Deliverables:**
 - [ ] `/wizard` command (interactive setup: checks OS, installs deps, pulls models)

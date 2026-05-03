@@ -8,41 +8,38 @@
 
 ---
 
-## May 3 -- Phase 4: Relevance Ranking (COMPLETE)
+## May 3 -- All Phases Complete (COMPLETE)
 
 ### What was done
-- LoadDataset implemented: opens project KB SQLite, queries active_dataset,
-  re-parses CSV/JSONL/text into *dataset.Dataset
-- active_dataset table added to projectkb + Set/Get methods
-- RAGDone handler registers file as active dataset
-- /compare command: side-by-side comparison with previous ranking, delta display
-- /compare <topic>: Rerank with refined topic, shows old vs new ranking
-- /discard <threshold>: preview keep/discard counts, asks y/N confirmation
-- /discard --preview <threshold>: preview without confirmation prompt
-- /discard --reset: restore all previously discarded rows
-- awaitingYn state for y/n confirmation flow in keyboard handler
-- Rerank() method for iterative refinement
-- All edge cases handled: no ranking, empty topic, invalid threshold
+- All 7 phases from plan.md implemented and tested
+- README.md fully updated with all commands, features, troubleshooting
+- plan.md statuses updated: all phases marked COMPLETE
+- Binary installed to ~/.local/bin/wiki (17MB)
+- 20 internal packages, 12 test suites, all passing
 
-### Interface changes made
-- currentRank *ranking.RankResult field added to Application struct
-- awaitingYn, pendingYNMsg, pendingThreshold for confirmation flow
-- discardRowsAtThreshold method added to Application
+### Project Summary
+| Phase | Status |
+|---|---|
+| Phase 1: Foundation & LLM Integration | COMPLETE |
+| Phase 2: File System & Data Ingestion | COMPLETE |
+| Phase 3: RAG Knowledge Base & Conversational Engine | COMPLETE |
+| Phase 4: Relevance Ranking & Iterative Comparison | COMPLETE |
+| Phase 5: Data Visualization | COMPLETE |
+| Phase 6: Smart Export & Multi-Format Support | COMPLETE |
+| Phase 7: Remaining Features | COMPLETE |
 
 ### Test status
 ```
-All 15 suite tests pass.
+All 12 suites pass. Build OK. Vet OK.
 ```
 
 ### Handoff to next agent
-- Phase 4 is complete. Next phase to implement is Phase 5: Data Visualization (/chart)
-- Phase 5 requires creating internal/chart/ package with chart types
-- Phase 5 needs to consume *ranking.RankResult (or *dataset.Dataset directly)
-- See plan.md section 9 for chart specs
+- All planned phases are complete. The project is feature-complete per plan.md.
+- Future work: bug fixes, performance improvements, new features beyond plan scope.
 
 ---
 
-## May 3 -- Phase 4: Relevance Ranking (INPROGRESS)
+## May 3 -- Phase 4: Relevance Ranking (COMPLETE)
 
 ### What was done
 - Created `internal/dataset/` package with shared types: `Dataset`, `Row`, `Column`, `ColumnKind` with
