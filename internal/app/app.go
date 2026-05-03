@@ -81,6 +81,7 @@ type (
 		Path string
 		Err  error
 	}
+	RAGProgressMsg struct{ Text string }
 	RAGDone struct {
 		Path     string
 		Chunks   int
@@ -282,8 +283,9 @@ type Application struct {
 	fetcher   webfetch.Fetcher
 	exporter   export.Exporter
 	pkb       projectkb.DB
-	ragClient    *rag.Client
-	ragDir       string
+	ragClient     *rag.Client
+	ragDir        string
+	program       *tea.Program // for sending messages from goroutines
 	currentRank  *ranking.RankResult // last /rank result in memory
 	awaitingYn      bool                // waiting for y/n confirmation
 	pendingYNMsg    string              // the question being asked
@@ -405,6 +407,11 @@ func New(cfg *config.Manager, client ollama.Client, mm *modelmgr.Manager, ragWor
 	}
 
 	return a
+}
+
+// SetProgram stores the Bubbletea program reference for sending messages from goroutines.
+func (a *Application) SetProgram(p *tea.Program) {
+	a.program = p
 }
 
 // Init initializes the application by refreshing models and pinging Ollama.
@@ -623,21 +630,23 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.busy = true
 		path := msg.Path
 		a.statusMsg = fmt.Sprintf("Indexing %s...", filepath.Base(path))
-		a.appendToViewport(fmt.Sprintf("[Indexing %s with RAG worker - waiting for response]", filepath.Base(path)))
-		return a, ingestRAGCmd(a, path)
+		a.appendToViewport(fmt.Sprintf("=== Starting RAG ingest: %s ===\n", filepath.Base(path)))
+		// Start ingest in a goroutine that streams progress via program.Send
+		go a.ingestStream(path)
+		return a, nil
+
+	case RAGProgressMsg:
+		a.appendToViewport(fmt.Sprintf("  %s", msg.Text))
+		a.statusMsg = msg.Text
+		return a, nil
 
 	case RAGDone:
 		a.busy = false
-		if len(msg.Progress) > 0 {
-			for _, p := range msg.Progress {
-				a.appendToViewport(fmt.Sprintf("  [RAG] %s", p))
-			}
-		}
 		if msg.Error != "" {
 			a.appendToViewport(fmt.Sprintf("[RAG error] %s", msg.Error))
 			a.statusMsg = "RAG error"
 		} else {
-			a.appendToViewport(fmt.Sprintf("[RAG done] %s - %d chunks indexed", filepath.Base(msg.Path), msg.Chunks))
+			a.appendToViewport(fmt.Sprintf("[RAG done] %s - %d chunks indexed\n", filepath.Base(msg.Path), msg.Chunks))
 			a.statusMsg = fmt.Sprintf("Indexed %d chunks", msg.Chunks)
 			// Register as active dataset for ranking
 			ext := strings.ToLower(filepath.Ext(msg.Path))
@@ -2742,39 +2751,40 @@ func (a *Application) queryRAG(question string, topK int) (*rag.QueryResult, err
 	return a.ragClient.Query(question, topK)
 }
 
-// ingestRAGCmd returns a command that sends a file to the RAG worker and returns a RAGDone message.
-func ingestRAGCmd(a *Application, path string) tea.Cmd {
-	return func() tea.Msg {
-		rootDir := a.scanCfg.RootDir
-		if rootDir == "" {
-			rootDir, _ = os.Getwd()
-		}
-		absPath, err := fileref.SafeResolve(rootDir, path)
-		if err != nil {
-			return RAGDone{Path: path, Error: err.Error()}
-		}
-		if errMsg := a.ensureRAGStarted(); errMsg != "" {
-			return RAGDone{Path: path, Error: errMsg}
-		}
-		result, err := a.ragClient.Ingest(absPath, "nomic-embed-text")
-		if err != nil {
-			prog := []string{}
-			if result != nil {
-				prog = result.Progress
-			}
-			return RAGDone{Path: path, Error: err.Error(), Progress: prog}
-		}
-		if result != nil && result.Error != "" {
-			return RAGDone{Path: path, Error: result.Error, Progress: result.Progress}
-		}
-		chunks := 0
-		progress := []string{}
-		if result != nil {
-			chunks = result.Chunks
-			progress = result.Progress
-		}
-		return RAGDone{Path: absPath, Chunks: chunks, Progress: progress}
+// ingestStream runs the RAG ingest in a goroutine, streaming progress via program.Send.
+func (a *Application) ingestStream(path string) {
+	p := a.program
+	if p == nil {
+		return
 	}
+
+	rootDir := a.scanCfg.RootDir
+	if rootDir == "" {
+		rootDir, _ = os.Getwd()
+	}
+
+	absPath, err := fileref.SafeResolve(rootDir, path)
+	if err != nil {
+		p.Send(RAGDone{Path: path, Error: err.Error()})
+		return
+	}
+
+	if errMsg := a.ensureRAGStarted(); errMsg != "" {
+		p.Send(RAGDone{Path: path, Error: errMsg})
+		return
+	}
+
+	// Run ingest with real-time progress via callback
+	chunks := 0
+	err = a.ragClient.IngestStream(absPath, "nomic-embed-text", func(msg string) {
+		p.Send(RAGProgressMsg{Text: msg})
+	})
+	if err != nil {
+		p.Send(RAGDone{Path: path, Error: err.Error()})
+		return
+	}
+
+	p.Send(RAGDone{Path: absPath, Chunks: chunks})
 }
 
 // Update the skills to mark SRS skills as implemented.

@@ -105,13 +105,12 @@ func main() {
 	appModel := app.New(cfg, client, mm, ragDir)
 
 	// --- Run Bubbletea program ---
-	// Default: alt screen for proper full-screen TUI.
-	// Use --select for inline mode (allows mouse text selection/copy).
 	opts := []tea.ProgramOption{tea.WithAltScreen(), tea.WithMouseCellMotion()}
 	if *inlineMode {
 		opts = []tea.ProgramOption{tea.WithMouseCellMotion()}
 	}
 	p := tea.NewProgram(appModel, opts...)
+	appModel.SetProgram(p) // allow streaming progress from goroutines
 
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error running TUI: %v\n", err)

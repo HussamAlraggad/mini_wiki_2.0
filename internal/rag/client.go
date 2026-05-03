@@ -203,7 +203,58 @@ func (c *Client) Ingest(path string, embedModel string) (*IngestResult, error) {
 				return result, fmt.Errorf("unexpected response: %s", resp.Type)
 			}
 		case <-timeout:
-			return result, fmt.Errorf("ingest timed out after 10 minutes")
+			return result, fmt.Errorf("ingest timed out after 30 minutes")
+		}
+	}
+}
+
+// IngestStream sends a file to the RAG worker for indexing with real-time progress.
+// The onProgress callback is called for each progress message as it arrives.
+func (c *Client) IngestStream(path string, embedModel string, onProgress func(msg string)) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	req := Request{Cmd: "ingest", Path: path, EmbedModel: embedModel}
+	if err := c.sendRequest(req); err != nil {
+		return err
+	}
+
+	timeout := time.After(30 * time.Minute)
+	for {
+		type respResult struct {
+			resp *Response
+			err  error
+		}
+		resultCh := make(chan respResult, 1)
+		go func() {
+			resp, err := c.readResponse()
+			resultCh <- respResult{resp, err}
+		}()
+
+		select {
+		case r := <-resultCh:
+			if r.err != nil {
+				if c.lastError != "" {
+					return fmt.Errorf("worker: %s", c.lastError)
+				}
+				return r.err
+			}
+			resp := r.resp
+			switch resp.Type {
+			case "progress":
+				if onProgress != nil {
+					onProgress(resp.Message)
+				}
+				continue
+			case "error":
+				return fmt.Errorf("%s", resp.Message)
+			case "done":
+				return nil
+			default:
+				return fmt.Errorf("unexpected response: %s", resp.Type)
+			}
+		case <-timeout:
+			return fmt.Errorf("ingest timed out after 30 minutes")
 		}
 	}
 }
