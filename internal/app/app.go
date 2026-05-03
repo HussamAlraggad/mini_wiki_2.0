@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -159,6 +160,10 @@ type (
 	}
 	ChartComplete struct{ Text string }
 	ChartFailed   struct{ Err error }
+
+	// Phase 7: Wizard
+	WizardRequested struct{}
+	WizardComplete  struct{ Text string }
 )
 
 // --- Layout ---
@@ -754,6 +759,18 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.errMsg = fmt.Sprintf("Chart error: %v", msg.Err)
 		return a, nil
 
+	// --- Wizard ---
+	case WizardRequested:
+		a.busy = true
+		a.statusMsg = "Running system check..."
+		return a, wizardCmd()
+
+	case WizardComplete:
+		a.busy = false
+		a.appendToViewport(msg.Text)
+		a.statusMsg = "Wizard complete"
+		return a, nil
+
 	// --- Web fetching ---
 	case FetchRequested:
 		a.statusMsg = fmt.Sprintf("Fetching %s...", msg.URL)
@@ -1315,6 +1332,9 @@ Memory & RAG:
 	case "/files":
 		return a, func() tea.Msg { return FilesListRequested{} }
 
+	case "/wizard":
+		return a, func() tea.Msg { return WizardRequested{} }
+
 	case "/ingest":
 		if len(parts) < 2 {
 			a.errMsg = "Usage: /ingest <filepath>"
@@ -1868,6 +1888,87 @@ func convertMessages(thread *conversation.Thread) []ollama.Message {
 
 // --- Phase 2: File system command factories ---
 
+func wizardCmd() tea.Cmd {
+	return func() tea.Msg {
+		var b strings.Builder
+		b.WriteString("=== System Check ===\n\n")
+
+		// Go version
+		b.WriteString("Go version: ")
+		cmd := exec.Command("go", "version")
+		out, err := cmd.Output()
+		if err == nil {
+			b.WriteString(strings.TrimSpace(string(out)))
+		} else {
+			b.WriteString("not found")
+		}
+		b.WriteString("\n")
+
+		// Python version
+		b.WriteString("Python: ")
+		for _, name := range []string{"python3", "python"} {
+			cmd := exec.Command(name, "--version")
+			out, err := cmd.Output()
+			if err == nil {
+				b.WriteString(strings.TrimSpace(string(out)))
+				break
+			}
+			b.WriteString("not found")
+		}
+		b.WriteString("\n")
+
+		// Ollama
+		b.WriteString("Ollama: ")
+		cmd = exec.Command("ollama", "--version")
+		out, err = cmd.Output()
+		if err == nil {
+			b.WriteString(strings.TrimSpace(string(out)))
+			// Check if running
+			cmd = exec.Command("sh", "-c", "curl -s http://127.0.0.1:11434/api/tags 2>/dev/null | head -c 1")
+			if runOut, _ := cmd.Output(); len(runOut) > 0 {
+				b.WriteString(" (running)")
+			} else {
+				b.WriteString(" (not running)")
+			}
+		} else {
+			b.WriteString("not installed")
+		}
+		b.WriteString("\n")
+
+		// Check key Python packages
+		b.WriteString("\nPython packages:\n")
+		for _, pkg := range []string{"chromadb", "ollama", "unstructured", "pypdf"} {
+			cmd := exec.Command("sh", "-c", fmt.Sprintf("%s -c \"import %s\" 2>/dev/null && echo 'ok' || echo 'missing'", "python3", pkg))
+			out, _ := cmd.Output()
+			status := strings.TrimSpace(string(out))
+			mark := " [x]"
+			if status != "ok" {
+				mark = " [ ]"
+			}
+			b.WriteString(fmt.Sprintf("  %s %s\n", mark, pkg))
+		}
+
+		// ChromaDB rag dir
+		b.WriteString("\nRAG storage: ")
+		home, _ := os.UserHomeDir()
+		ragDir := filepath.Join(home, ".wiki", "rag")
+		if _, err := os.Stat(ragDir); err == nil {
+			b.WriteString(ragDir + " (exists)")
+		} else {
+			b.WriteString("no RAG index found (run /ingest first)")
+		}
+		b.WriteString("\n")
+
+		b.WriteString("\n=== Recommendations ===\n")
+		// Check if models are pulled
+		b.WriteString("Recommended: ollama pull nomic-embed-text\n")
+		b.WriteString("Recommended: ollama pull qwen2.5-coder\n")
+		b.WriteString("First time: bash setup.sh\n")
+
+		return WizardComplete{Text: b.String()}
+	}
+}
+
 func scanCmd(scanner filescanner.Scanner, cfg filescanner.ScannerConfig) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -2129,6 +2230,7 @@ var commandList = []suggestionItem{
 	{text: "/discard", description: "Discard rows below relevance threshold", category: "cmd"},
 	{text: "/chart", description: "Generate chart (bar, trend, pie, scatter, histogram, box, heatmap)", category: "cmd"},
 	{text: "/infer", description: "Auto-detect file format", category: "cmd"},
+	{text: "/wizard", description: "Run system check and setup assistant", category: "cmd"},
 	{text: "/srs", description: "Run SRS generation pipeline", category: "cmd"},
 	{text: "/cancel", description: "Cancel current RAG operation", category: "cmd"},
 	{text: "/exit", description: "Quit the application", category: "cmd"},

@@ -121,6 +121,8 @@ func (e *exporter) Export(ctx context.Context, data *ExportData, cfg ExportConfi
 		result, err = e.exportCSV(ctx, data, cfg)
 	case "json":
 		result, err = e.exportJSON(ctx, data, cfg)
+	case "md", "markdown":
+		result, err = e.exportMarkdown(ctx, data, cfg)
 	default:
 		result, err = e.exportXLSX(ctx, data, cfg)
 	}
@@ -309,6 +311,59 @@ func (e *exporter) exportJSON(ctx context.Context, data *ExportData, cfg ExportC
 		Path:     outputPath,
 		FileName: fileName,
 		Size:     int64(len(jsonData)),
+		Rows:     len(data.Rows),
+		Duration: time.Since(start),
+	}, nil
+}
+
+func (e *exporter) exportMarkdown(ctx context.Context, data *ExportData, cfg ExportConfig) (*ExportResult, error) {
+	start := time.Now()
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("# %s\n\n", data.SheetName))
+	b.WriteString("|")
+	for _, col := range data.Columns {
+		b.WriteString(" " + col.Name + " |")
+	}
+	b.WriteString("\n|")
+	for range data.Columns {
+		b.WriteString(" --- |")
+	}
+	b.WriteString("\n")
+
+	for _, row := range data.Rows {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+		b.WriteString("|")
+		for _, val := range row {
+			// Escape pipe characters in cell values
+			cell := strings.ReplaceAll(val, "|", "\\|")
+			b.WriteString(" " + cell + " |")
+		}
+		b.WriteString("\n")
+	}
+
+	content := b.String()
+	fileName := cfg.FileName
+	if fileName == "" {
+		fileName = GenerateFileName("export", "md")
+	}
+	if filepath.Ext(fileName) == "" {
+		fileName += ".md"
+	}
+	outputPath := filepath.Join(cfg.OutputDir, fileName)
+
+	if err := os.WriteFile(outputPath, []byte(content), 0600); err != nil {
+		return nil, fmt.Errorf("write file: %w", err)
+	}
+
+	return &ExportResult{
+		Path:     outputPath,
+		FileName: fileName,
+		Size:     int64(len(content)),
 		Rows:     len(data.Rows),
 		Duration: time.Since(start),
 	}, nil
