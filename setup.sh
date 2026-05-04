@@ -73,6 +73,18 @@ if $PIP install chromadb ollama unstructured pypdf 2>&1 | grep -q "externally-ma
 fi
 echo "  Python packages installed successfully."
 
+# Create a global symlink so the tool can find .venv from any directory
+echo ""
+echo "  Linking .venv to ~/.config/mini-wiki/.venv for global access..."
+CONFIG_DIR="$HOME/.config/mini-wiki"
+mkdir -p "$CONFIG_DIR"
+if [ -d "$CONFIG_DIR/.venv" ]; then
+    echo "  Global .venv already exists at $CONFIG_DIR/.venv"
+elif [ -d ".venv" ]; then
+    ln -sf "$(pwd)/.venv" "$CONFIG_DIR/.venv"
+    echo "  Linked .venv -> $CONFIG_DIR/.venv"
+fi
+
 # --- Check Ollama ---
 echo ""
 echo "[3/5] Checking Ollama..."

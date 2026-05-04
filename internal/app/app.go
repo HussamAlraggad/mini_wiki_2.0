@@ -1226,36 +1226,38 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseMsg:
 		// Wheel events: pass to viewport for scrolling
 		if msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown {
-			var cmd tea.Cmd
-			a.viewport, cmd = a.viewport.Update(msg)
-			return a, cmd
+			a.viewport, _ = a.viewport.Update(msg)
+			return a, nil
 		}
 
 		// Left-click drag: track selection, auto-copy on release
 		if msg.Button == tea.MouseButtonLeft {
 			switch msg.Action {
 			case tea.MouseActionPress:
-				// Start of drag selection
 				a.mouseSelecting = true
 				a.mouseDragStart = msg.Y
 				a.mouseDragged = false
+				a.statusMsg = "Selecting... release to copy"
 				return a, nil
 
 			case tea.MouseActionMotion:
-				// User is dragging
 				if a.mouseSelecting {
 					a.mouseDragged = true
+					a.statusMsg = "Selecting... release to copy"
 				}
 				return a, nil
 
 			case tea.MouseActionRelease:
 				if a.mouseSelecting && a.mouseDragged {
-					// User dragged and released: copy visible viewport content
 					a.mouseSelecting = false
 					a.mouseDragged = false
 					if a.viewportContent != "" {
+						n := len(a.viewportContent)
 						if err := clipboard.WriteAll(a.viewportContent); err == nil {
-							a.statusMsg = "Copied to clipboard"
+							a.appendLine(fmt.Sprintf("[Copied %d characters to clipboard]", n))
+							a.statusMsg = fmt.Sprintf("Copied %d chars", n)
+						} else {
+							a.statusMsg = fmt.Sprintf("Copy failed: %v", err)
 						}
 					}
 					return a, nil
@@ -2802,7 +2804,8 @@ func (a *Application) ensureRAGStarted() string {
 	// Build list of Python candidates:
 	// 1. .venv/ in the CWD (project root)
 	// 2. .venv/ alongside the wiki binary itself
-	// 3. system python3 / python
+	// 3. .venv/ in the global config directory (~/.config/mini-wiki/)
+	// 4. system python3 / python
 	rootDir := a.scanCfg.RootDir
 	var pythonCandidates []string
 
@@ -2823,6 +2826,15 @@ func (a *Application) ensureRAGStarted() string {
 				filepath.Join(exeDir, ".venv", "bin", "python"),
 			)
 		}
+	}
+
+	// Global config directory .venv (covers running wiki from any directory)
+	if home, err := os.UserHomeDir(); err == nil {
+		configDir := filepath.Join(home, ".config", "mini-wiki")
+		pythonCandidates = append(pythonCandidates,
+			filepath.Join(configDir, ".venv", "bin", "python3"),
+			filepath.Join(configDir, ".venv", "bin", "python"),
+		)
 	}
 
 	// System fallbacks
