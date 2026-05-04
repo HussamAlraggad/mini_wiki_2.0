@@ -522,17 +522,17 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return a, nil
 				}
 				for _, re := range result.Errors {
-					a.appendToViewport(errorStyle.Render(fmt.Sprintf("Could not resolve %s: %s", re.Raw, re.Reason)))
-				}
-				if result.TotalSize > 0 {
-					content = a.fileref.Inject(content, result)
-					a.appendToViewport(fmt.Sprintf("Attached %d files (%d bytes)", len(result.Contents), result.TotalSize))
-				}
-			} else {
-				// No file index: resolve @ refs by checking the filesystem directly
-				a.resolveAtRefsDirect(&content, refs)
+				a.appendLine(errorStyle.Render(fmt.Sprintf("Could not resolve %s: %s", re.Raw, re.Reason)))
 			}
+			if result.TotalSize > 0 {
+				content = a.fileref.Inject(content, result)
+				a.appendLine(fmt.Sprintf("Attached %d files (%d bytes)", len(result.Contents), result.TotalSize))
+			}
+		} else {
+			// No file index: resolve @ refs by checking the filesystem directly
+			a.resolveAtRefsDirect(&content, refs)
 		}
+	}
 
 		// Auto-save to project KB memory (non-blocking, errors logged)
 		go func() {
@@ -576,7 +576,7 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		ragParts = append(ragParts, "[/End of retrieved context]\n")
 		content = strings.Join(ragParts, "\n") + "\n\nQuestion: " + content
-		a.appendToViewport(fmt.Sprintf("[RAG: %d sources retrieved]", len(ragResult.Sources)))
+		a.appendLine(fmt.Sprintf("[RAG: %d sources retrieved]", len(ragResult.Sources)))
 	}
 
 	// Add user message to thread
@@ -587,7 +587,7 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	a.updateTokenCount()
 
 	// Render user message in viewport
-	a.appendToViewport(formatUserMsg(content))
+	a.appendLine(formatUserMsg(content))
 
 	// Clear input and start streaming
 	a.input.SetValue("")
@@ -608,9 +608,9 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.fileIndex = msg.Result
 		summary := fmt.Sprintf("Scanned: %d files, %d dirs, %s total in %s",
 			len(msg.Result.Files), msg.Result.Dirs, humanBytes(msg.Result.Total), msg.Result.Elapsed.Round(time.Millisecond))
-		a.appendToViewport(helpStyle.Render(summary))
+		a.appendLine(helpStyle.Render(summary))
 		if len(msg.Result.Skipped) > 0 {
-			a.appendToViewport(helpStyle.Render(fmt.Sprintf("Skipped %d entries", len(msg.Result.Skipped))))
+			a.appendLine(helpStyle.Render(fmt.Sprintf("Skipped %d entries", len(msg.Result.Skipped))))
 		}
 		a.statusMsg = fmt.Sprintf("Ready -- %d files indexed", len(msg.Result.Files))
 		return a, nil
@@ -622,10 +622,10 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case FilesListRequested:
 		if a.fileIndex == nil {
-			a.appendToViewport(errorStyle.Render("No files indexed. Run /scan first."))
+			a.appendLine(errorStyle.Render("No files indexed. Run /scan first."))
 			return a, nil
 		}
-		a.appendToViewport(formatFileTree(a.fileIndex))
+		a.appendLine(formatFileTree(a.fileIndex))
 		return a, nil
 
 	// --- File ingestion (fast: parse + register, no embeddings) ---
@@ -638,10 +638,10 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case RAGDone:
 		a.busy = false
 		if msg.Error != "" {
-			a.appendToViewport(fmt.Sprintf("[Error] %s", msg.Error))
+			a.appendLine(fmt.Sprintf("[Error] %s", msg.Error))
 			a.statusMsg = "Error"
 		} else if msg.Chunks > 0 {
-			a.appendToViewport(fmt.Sprintf("[Embed done] %d chunks indexed for RAG search\n", msg.Chunks))
+			a.appendLine(fmt.Sprintf("[Embed done] %d chunks indexed for RAG search\n", msg.Chunks))
 			a.statusMsg = fmt.Sprintf("Embedded %d chunks", msg.Chunks)
 			// Register as active dataset for ranking
 			ext := strings.ToLower(filepath.Ext(msg.Path))
@@ -664,19 +664,19 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case IngestCompleteMsg:
 		a.busy = false
-		a.appendToViewport(msg.Text)
+		a.appendLine(msg.Text)
 		a.statusMsg = "Ingest complete"
 		return a, nil
 
 	case RAGProgressMsg:
-		a.appendToViewport(fmt.Sprintf("  %s", msg.Text))
+		a.appendLine(fmt.Sprintf("  %s", msg.Text))
 		a.statusMsg = msg.Text
 		return a, nil
 
 	case EmbedRequested:
 		a.busy = true
 		a.statusMsg = "Starting embedding..."
-		a.appendToViewport("=== Starting embedding for RAG search ===\n")
+		a.appendLine("=== Starting embedding for RAG search ===\n")
 		// Get active dataset path
 		filePath, _, err := a.pkb.GetActiveDataset(context.Background())
 		if err != nil {
@@ -695,7 +695,7 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case RankComplete:
 		a.busy = false
-		a.appendToViewport(msg.Text)
+		a.appendLine(msg.Text)
 		if msg.Result != nil {
 			a.currentRank = msg.Result
 			_ = a.pkb.SaveRanking(context.Background(), &projectkb.RankingResult{
@@ -719,7 +719,7 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Topic == "" {
 			// No topic: show current ranking again
 			table := ranking.FormatRankingTable(a.currentRank, 20)
-			a.appendToViewport(table)
+			a.appendLine(table)
 		} else {
 			// New topic: rerank and show comparison
 			a.busy = true
@@ -753,10 +753,10 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		preview := fmt.Sprintf("Threshold: %.2f\n  Keep: %d rows (score >= %.2f)\n  Discard: %d rows (score < %.2f)",
 			threshold, keep, threshold, discard, threshold)
-		a.appendToViewport(preview)
+		a.appendLine(preview)
 
 		if discard == 0 {
-			a.appendToViewport("No rows to discard at this threshold.")
+			a.appendLine("No rows to discard at this threshold.")
 			return a, nil
 		}
 
@@ -764,7 +764,7 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.awaitingYn = true
 		a.pendingYNMsg = fmt.Sprintf("Discard %d rows below score %.2f? (y/N)", discard, threshold)
 		a.pendingThreshold = threshold
-		a.appendToViewport(a.pendingYNMsg)
+		a.appendLine(a.pendingYNMsg)
 		a.statusMsg = "Waiting for confirmation..."
 		return a, nil
 
@@ -779,7 +779,7 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ChartComplete:
 		a.busy = false
-		a.appendToViewport(msg.Text)
+		a.appendLine(msg.Text)
 		a.statusMsg = "Chart rendered"
 		return a, nil
 
@@ -796,7 +796,7 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case WizardComplete:
 		a.busy = false
-		a.appendToViewport(msg.Text)
+		a.appendLine(msg.Text)
 		a.statusMsg = "Wizard complete"
 		return a, nil
 
@@ -810,10 +810,10 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		r := msg.Result
 		summary := fmt.Sprintf("Fetched %s (%s, %d bytes, %s)",
 			r.Meta.FinalURL, r.Meta.Title, r.Meta.ContentLength, r.Meta.Duration.Round(time.Millisecond))
-		a.appendToViewport(helpStyle.Render(summary))
+		a.appendLine(helpStyle.Render(summary))
 		// Append content to conversation context
 		content := fmt.Sprintf("\n--- Web: %s ---\n%s\n", r.Meta.FinalURL, r.Content)
-		a.appendToViewport(helpStyle.Render(content))
+		a.appendLine(helpStyle.Render(content))
 		a.statusMsg = "Fetch complete"
 		return a, nil
 
@@ -836,7 +836,7 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		r := msg.Result
 		summary := fmt.Sprintf("Exported %d rows to %s (%s, %s)",
 			r.Rows, r.FileName, humanBytes(r.Size), r.Duration.Round(time.Millisecond))
-		a.appendToViewport(summary)
+		a.appendLine(summary)
 		a.statusMsg = "Export complete"
 		return a, nil
 
@@ -857,7 +857,7 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if err := a.pkb.SaveBookmark(context.Background(), &bm); err != nil {
 			a.errMsg = fmt.Sprintf("Save bookmark: %v", err)
 		} else {
-			a.appendToViewport(helpStyle.Render(fmt.Sprintf("Bookmarked: %s", msg.Title)))
+			a.appendLine(helpStyle.Render(fmt.Sprintf("Bookmarked: %s", msg.Title)))
 			a.statusMsg = "Bookmark saved"
 		}
 		return a, nil
@@ -869,7 +869,7 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		if len(bookmarks) == 0 {
-			a.appendToViewport(helpStyle.Render("No bookmarks yet. Use /bookmark <title> to save one."))
+			a.appendLine(helpStyle.Render("No bookmarks yet. Use /bookmark <title> to save one."))
 		} else {
 			var b strings.Builder
 			b.WriteString("Bookmarks:\n")
@@ -880,7 +880,7 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					b.WriteString(fmt.Sprintf("    Tags: %s\n", bm.Tags))
 				}
 			}
-			a.appendToViewport(helpStyle.Render(b.String()))
+			a.appendLine(helpStyle.Render(b.String()))
 		}
 		a.statusMsg = "Bookmarks loaded"
 		return a, nil
@@ -893,7 +893,7 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		if len(entries) == 0 {
-			a.appendToViewport(helpStyle.Render("No history yet."))
+			a.appendLine(helpStyle.Render("No history yet."))
 		} else {
 			var b strings.Builder
 			b.WriteString("Recent queries:\n")
@@ -901,7 +901,7 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				t := e.CreatedAt.Format("15:04")
 				b.WriteString(fmt.Sprintf("  - [%s] %s\n", t, truncateText(e.Query, 80)))
 			}
-			a.appendToViewport(helpStyle.Render(b.String()))
+			a.appendLine(helpStyle.Render(b.String()))
 		}
 		a.statusMsg = "History loaded"
 		return a, nil
@@ -914,7 +914,7 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		if len(skills) == 0 {
-			a.appendToViewport(helpStyle.Render("No skills registered yet."))
+			a.appendLine(helpStyle.Render("No skills registered yet."))
 		} else {
 			var b strings.Builder
 			b.WriteString("Tool skills:\n")
@@ -924,7 +924,7 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					b.WriteString(fmt.Sprintf("    Command: %s\n", s.Command))
 				}
 			}
-			a.appendToViewport(helpStyle.Render(b.String()))
+			a.appendLine(helpStyle.Render(b.String()))
 		}
 		a.statusMsg = "Skills loaded"
 		return a, nil
@@ -936,7 +936,7 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		if len(flaws) == 0 {
-			a.appendToViewport(helpStyle.Render("No known flaws. Good! Keep an eye out for issues."))
+			a.appendLine(helpStyle.Render("No known flaws. Good! Keep an eye out for issues."))
 		} else {
 			var b strings.Builder
 			b.WriteString("Known flaws & solutions:\n")
@@ -949,7 +949,7 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				b.WriteString(fmt.Sprintf("    Symptom: %s\n", f.Symptom))
 				b.WriteString(fmt.Sprintf("    Fix: %s\n", f.Solution))
 			}
-			a.appendToViewport(helpStyle.Render(b.String()))
+			a.appendLine(helpStyle.Render(b.String()))
 		}
 		a.statusMsg = "Flaws loaded"
 		return a, nil
@@ -972,13 +972,13 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case SRSProgress:
 		a.statusMsg = msg.Message
 		if msg.Done {
-			a.appendToViewport(helpStyle.Render(fmt.Sprintf("   Stage %d: %s", msg.Stage, msg.Message)))
+			a.appendLine(helpStyle.Render(fmt.Sprintf("   Stage %d: %s", msg.Stage, msg.Message)))
 		}
 		return a, nil
 
 	case SRSComplete:
 		// Display the SRS document
-		a.appendToViewport(helpStyle.Render("\n--- SRS Document Generated ---\n"))
+		a.appendLine(helpStyle.Render("\n--- SRS Document Generated ---\n"))
 		// Show first 20 lines as preview
 		lines := strings.Split(msg.Content, "\n")
 		preview := lines
@@ -986,7 +986,7 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			preview = preview[:25]
 			preview = append(preview, "... (full document saved to project KB)")
 		}
-		a.appendToViewport(strings.Join(preview, "\n"))
+		a.appendLine(strings.Join(preview, "\n"))
 		a.statusMsg = fmt.Sprintf("SRS generated: %s", msg.RunID)
 		// Save to project KB
 		a.pkb.SaveSRSDocument(context.Background(), &projectkb.SRSDocument{
@@ -1107,10 +1107,10 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						a.discardRowsAtThreshold(a.currentRank, a.pendingThreshold)
 					}
 				} else {
-					a.appendToViewport("Cancelled.")
+					a.appendLine("Cancelled.")
 				}
 			} else {
-				a.appendToViewport("Cancelled.")
+				a.appendLine("Cancelled.")
 			}
 			a.statusMsg = "Ready"
 			var cmd tea.Cmd
@@ -1243,7 +1243,7 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case TaskListRequested:
 		if len(a.tasks) == 0 {
-			a.appendToViewport("No tasks. Use /task <description> to add one.")
+			a.appendLine("No tasks. Use /task <description> to add one.")
 		} else {
 			var b strings.Builder
 			b.WriteString("Tasks:\n")
@@ -1254,7 +1254,7 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				b.WriteString(fmt.Sprintf("  [%s] %s\n", mark, t.text))
 			}
-			a.appendToViewport(b.String())
+			a.appendLine(b.String())
 		}
 		return a, nil
 
@@ -1309,7 +1309,7 @@ Memory & RAG:
   Every message is auto-saved to the project KB (./.wiki/)
   /ingest automatically builds the knowledge base
   Chat searches past conversations for relevant context`
-		a.appendToViewport(helpStyle.Render(help))
+		a.appendLine(helpStyle.Render(help))
 
 	case "/model":
 		if len(parts) < 2 {
@@ -1321,7 +1321,7 @@ Memory & RAG:
 	case "/models":
 		names := a.models.AvailableNames()
 		if len(names) == 0 {
-			a.appendToViewport(errorStyle.Render("No models available. Try /refresh"))
+			a.appendLine(errorStyle.Render("No models available. Try /refresh"))
 		} else {
 			var b strings.Builder
 			b.WriteString("Available models:\n")
@@ -1332,7 +1332,7 @@ Memory & RAG:
 				}
 				b.WriteString(fmt.Sprintf("  %s%s\n", marker, name))
 			}
-			a.appendToViewport(helpStyle.Render(b.String()))
+			a.appendLine(helpStyle.Render(b.String()))
 		}
 
 	case "/refresh":
@@ -1450,7 +1450,7 @@ Memory & RAG:
 		if len(parts) >= 2 && parts[1] == "--reset" {
 			if a.currentRank != nil {
 				a.currentRank.DiscardCount = 0
-				a.appendToViewport("All previously discarded rows restored.")
+				a.appendLine("All previously discarded rows restored.")
 			} else {
 				a.errMsg = "No ranking to reset."
 			}
@@ -1487,10 +1487,10 @@ Memory & RAG:
 		filename := strings.TrimPrefix(parts[1], "@")
 		format := dataset.AutoDetect(filename)
 		if format == "" {
-			a.appendToViewport(fmt.Sprintf("Cannot detect format for %s", filename))
+			a.appendLine(fmt.Sprintf("Cannot detect format for %s", filename))
 		} else {
-			a.appendToViewport(fmt.Sprintf("Detected: %s", dataset.DetectFormat(filename)))
-			a.appendToViewport(fmt.Sprintf("Try: /ingest @%s", filename))
+			a.appendLine(fmt.Sprintf("Detected: %s", dataset.DetectFormat(filename)))
+			a.appendLine(fmt.Sprintf("Try: /ingest @%s", filename))
 		}
 		return a, nil
 
@@ -1529,7 +1529,7 @@ Memory & RAG:
 		a.statusMsg = "Cancelling..."
 		if a.ragClient != nil && a.ragClient.IsRunning() {
 			a.ragClient.Stop()
-			a.appendToViewport("[RAG operation cancelled]")
+			a.appendLine("[RAG operation cancelled]")
 		}
 		a.statusMsg = "Cancelled"
 		return a, nil
@@ -1814,6 +1814,15 @@ func (a *Application) appendToViewport(content string) {
 	a.viewportContent += content
 	a.viewport.SetContent(a.viewportContent)
 	a.viewport.GotoBottom()
+}
+
+// appendLine appends a complete message, ensuring it ends with a newline
+// so each message appears on its own line in the chat viewport.
+func (a *Application) appendLine(content string) {
+	if !strings.HasSuffix(content, "\n") {
+		content += "\n"
+	}
+	a.appendToViewport(content)
 }
 
 func formatUserMsg(content string) string {
@@ -2616,7 +2625,7 @@ func (a *Application) discardRowsAtThreshold(result *ranking.RankResult, thresho
 		Threshold:     threshold,
 		RowsDiscarded: discarded,
 	})
-	a.appendToViewport(fmt.Sprintf("Discarded %d rows. Remaining: %d rows.", discarded, kept.RowCount))
+	a.appendLine(fmt.Sprintf("Discarded %d rows. Remaining: %d rows.", discarded, kept.RowCount))
 }
 
 func chartCmd(a *Application, msg ChartRequested) tea.Cmd {
@@ -2686,14 +2695,14 @@ func (a *Application) resolveAtRefsDirect(content *string, refs []fileref.Refere
 			continue
 		}
 		if len(data) > 10*1024*1024 {
-			a.appendToViewport(fmt.Sprintf("[%s too large (%d MB), showing first 10MB]", pathOnly, len(data)/(1024*1024)))
+			a.appendLine(fmt.Sprintf("[%s too large (%d MB), showing first 10MB]", pathOnly, len(data)/(1024*1024)))
 			data = data[:10*1024*1024]
 		}
 		*content = *content + "\n\n```" + pathOnly + "\n" + string(data) + "\n```"
 		attached = append(attached, pathOnly)
 	}
 	if len(attached) > 0 {
-		a.appendToViewport(fmt.Sprintf("Attached %d files", len(attached)))
+		a.appendLine(fmt.Sprintf("Attached %d files", len(attached)))
 	}
 }
 
