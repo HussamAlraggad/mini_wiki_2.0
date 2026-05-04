@@ -242,8 +242,10 @@ func (c *Client) IngestStream(path string, embedModel string, onProgress func(ms
 		err  error
 	}
 
-	// Read responses with 30-minute timeout
-	timeout := time.After(30 * time.Minute)
+	// Read responses with timeout.
+	// Large files (e.g. 1GB+ with long lines) can take hours to embed.
+	const ingestTimeout = 120 * time.Minute
+	timeout := time.After(ingestTimeout)
 	for {
 		resultCh := make(chan respResult, 1)
 		go func() {

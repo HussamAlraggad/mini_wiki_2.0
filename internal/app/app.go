@@ -682,8 +682,8 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case EmbedRequested:
 		a.busy = true
-		a.statusMsg = "Starting embedding..."
-		a.appendLine("=== Starting embedding for RAG search ===\n")
+		a.statusMsg = "Starting embedding (press Escape to cancel)..."
+		a.appendLine("=== Starting embedding for RAG search (press Escape to cancel) ===\n")
 		// Get active dataset path
 		filePath, _, err := a.pkb.GetActiveDataset(context.Background())
 		if err != nil {
