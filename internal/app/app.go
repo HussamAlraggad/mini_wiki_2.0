@@ -298,6 +298,11 @@ type Application struct {
 	mem        memory.MemStore
 	srsPipeline *srs.Pipeline
 
+	// Mouse selection state
+	mouseSelecting bool  // true when user is dragging to select text
+	mouseDragStart int   // Y position where drag started
+	mouseDragged    bool // true if mouse actually moved during drag
+
 	// UI components
 	input    textinput.Model
 	viewport viewport.Model
@@ -1217,11 +1222,51 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.updateSuggestions()
 		return a, cmd
 
-	// --- Mouse events (scrolling) ---
+	// --- Mouse events (scrolling + text selection) ---
 	case tea.MouseMsg:
-		var cmd tea.Cmd
-		a.viewport, cmd = a.viewport.Update(msg)
-		return a, cmd
+		// Wheel events: pass to viewport for scrolling
+		if msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown {
+			var cmd tea.Cmd
+			a.viewport, cmd = a.viewport.Update(msg)
+			return a, cmd
+		}
+
+		// Left-click drag: track selection, auto-copy on release
+		if msg.Button == tea.MouseButtonLeft {
+			switch msg.Action {
+			case tea.MouseActionPress:
+				// Start of drag selection
+				a.mouseSelecting = true
+				a.mouseDragStart = msg.Y
+				a.mouseDragged = false
+				return a, nil
+
+			case tea.MouseActionMotion:
+				// User is dragging
+				if a.mouseSelecting {
+					a.mouseDragged = true
+				}
+				return a, nil
+
+			case tea.MouseActionRelease:
+				if a.mouseSelecting && a.mouseDragged {
+					// User dragged and released: copy visible viewport content
+					a.mouseSelecting = false
+					a.mouseDragged = false
+					if a.viewportContent != "" {
+						if err := clipboard.WriteAll(a.viewportContent); err == nil {
+							a.statusMsg = "Copied to clipboard"
+						}
+					}
+					return a, nil
+				}
+				a.mouseSelecting = false
+				a.mouseDragged = false
+				return a, nil
+			}
+		}
+
+		return a, nil
 
 	// --- Task messages ---
 	case TaskAddRequested:
