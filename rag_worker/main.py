@@ -102,8 +102,12 @@ def main():
                 if "embed_model" in cmd and cmd["embed_model"]:
                     current_embedder = Embedder(model=cmd["embed_model"], base_url=ollama_url)
 
-                result = ingest_file(path, current_embedder, vector_db, chunk_size, overlap)
-                # Send progress messages during ingestion
+                # Progress callback sends real-time updates to Go client
+                def on_progress(msg):
+                    send_response({"type": "progress", "message": msg})
+
+                result = ingest_file(path, current_embedder, vector_db, chunk_size, overlap, progress_callback=on_progress)
+                # Send any remaining progress messages
                 if result.progress:
                     for p in result.progress:
                         send_response({"type": "progress", "message": p})

@@ -109,6 +109,7 @@ def ingest_file(
     vector_db: VectorDB,
     chunk_size: int = 800,
     overlap: int = 100,
+    progress_callback=None,
 ) -> IngestionResult:
     """Ingest a single file into the vector database.
 
@@ -134,7 +135,7 @@ def ingest_file(
         progress.append(f"Reading {os.path.basename(path)} ({file_size / 1024:.0f} KB)...")
         # For JSONL/CSV files: process line-by-line to save memory
         if ext in (".jsonl", ".ndjson", ".csv", ".tsv") and file_size > LARGE_FILE_WARN:
-            result = ingest_large_text_file(path, embedder, vector_db, chunk_size, overlap)
+            result = ingest_large_text_file(path, embedder, vector_db, chunk_size, overlap, progress_callback=progress_callback)
             result.progress = progress + result.progress
             return result
 
@@ -164,18 +165,20 @@ def ingest_large_text_file(
     vector_db: VectorDB,
     chunk_size: int = 800,
     overlap: int = 100,
+    progress_callback=None,
 ) -> IngestionResult:
     """Ingest a large text file (CSV, JSONL) line-by-line to save memory.
 
     Only loads a batch of lines at a time, processes them, then frees memory.
+    Calls progress_callback(msg) after each batch for real-time progress.
     """
     logger.info(f"Ingesting large file in streaming mode: {path}")
     total_chunks = 0
     source_name = os.path.basename(path)
+    progress = []
 
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
-            line_buffer = []
             line_count = 0
             batch_text = ""
 
@@ -193,7 +196,10 @@ def ingest_large_text_file(
                         n = _embed_and_store(path, source_name, chunks, embedder, vector_db)
                         total_chunks += n
                     batch_text = ""  # Free memory
-                    logger.info(f"  Processed {line_count} lines, {total_chunks} chunks so far")
+                    msg = f"  Processed {line_count} lines, {total_chunks} chunks so far"
+                    logger.info(msg)
+                    if progress_callback:
+                        progress_callback(msg)
 
             # Process remaining
             if batch_text.strip():
@@ -206,10 +212,10 @@ def ingest_large_text_file(
         logger.warning(f"Memory error at line {line_count}. Committing {total_chunks} chunks so far.")
     except Exception as e:
         logger.exception(f"Error during streaming ingestion at line {line_count}")
-        return IngestionResult(path=path, chunks=total_chunks, error=str(e))
+        return IngestionResult(path=path, chunks=total_chunks, error=str(e), progress=progress)
 
     total_in_db = vector_db.count()
-    return IngestionResult(path=path, chunks=total_chunks, total_chunks=total_in_db)
+    return IngestionResult(path=path, chunks=total_chunks, total_chunks=total_in_db, progress=progress)
 
 
 def _chunk_and_embed(

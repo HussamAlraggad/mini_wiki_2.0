@@ -242,11 +242,15 @@ func (c *Client) IngestStream(path string, embedModel string, onProgress func(ms
 		err  error
 	}
 
-	// Read responses with timeout.
-	// Large files (e.g. 1GB+ with long lines) can take hours to embed.
-	const ingestTimeout = 120 * time.Minute
-	timeout := time.After(ingestTimeout)
+	// Use idle-progress timeout: if no progress message is received for
+	// 5 minutes, assume the process is hung and kill it. This lets large
+	// files take as long as they need as long as they're making progress.
+	const idleTimeout = 5 * time.Minute
+	lastProgress := time.Now()
 	for {
+		// Set per-iteration timeout to idleTimeout from last progress
+		deadline := time.After(time.Until(lastProgress.Add(idleTimeout)))
+
 		resultCh := make(chan respResult, 1)
 		go func() {
 			resp, err := c.readResponse()
@@ -268,6 +272,7 @@ func (c *Client) IngestStream(path string, embedModel string, onProgress func(ms
 			resp := r.resp
 			switch resp.Type {
 			case "progress":
+				lastProgress = time.Now()
 				if onProgress != nil {
 					onProgress(resp.Message)
 				}
@@ -281,9 +286,10 @@ func (c *Client) IngestStream(path string, embedModel string, onProgress func(ms
 				c.killProcess()
 				return 0, fmt.Errorf("unexpected response: %s", resp.Type)
 			}
-		case <-timeout:
+		case <-deadline:
 			c.killProcess()
-			return 0, fmt.Errorf("ingest timed out after 30 minutes")
+			elapsed := time.Since(lastProgress)
+			return 0, fmt.Errorf("ingest stalled: no progress for %v (worker killed). Press Escape and try again.", elapsed.Round(time.Second))
 		}
 	}
 }
