@@ -1,6 +1,7 @@
 #!/bin/bash
 # setup.sh — Install all dependencies for mini-wiki
 # Run this script once after cloning the repo.
+# Handles systems without pip by creating a virtual environment.
 
 set -e
 
@@ -9,6 +10,7 @@ echo ""
 
 # --- Check Python ---
 echo "[1/5] Checking Python..."
+PYTHON=""
 if command -v python3 &>/dev/null; then
     PYTHON=python3
 elif command -v python &>/dev/null; then
@@ -24,12 +26,50 @@ echo "  Found: $($PYTHON --version)"
 echo ""
 echo "[2/5] Installing Python packages (chromadb, ollama, unstructured, pypdf)..."
 echo "  This may take a few minutes..."
-# Try with --break-system-packages first (needed on Debian/Ubuntu)
-if $PYTHON -m pip install chromadb ollama unstructured pypdf 2>&1 | grep -q "externally-managed"; then
-    echo "  Detected externally-managed environment. Using --break-system-packages..."
-    $PYTHON -m pip install --break-system-packages chromadb ollama unstructured pypdf
+
+# Check if pip is available
+if $PYTHON -m pip --version &>/dev/null; then
+    PIP="$PYTHON -m pip"
 else
-    $PYTHON -m pip install chromadb ollama unstructured pypdf
+    echo "  pip not found. Creating virtual environment..."
+    # Check if venv module is available
+    if $PYTHON -m venv --help &>/dev/null; then
+        # Try creating venv (may need --without-pip if ensurepip is missing)
+        if $PYTHON -m venv .venv &>/dev/null; then
+            echo "  Virtual environment created at .venv/"
+        else
+            echo "  ensurepip not available. Creating venv without pip..."
+            $PYTHON -m venv --without-pip .venv
+            echo "  Bootstrapping pip..."
+            curl -sS https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py
+            .venv/bin/python3 /tmp/get-pip.py &>/dev/null
+            echo "  pip installed in virtual environment."
+        fi
+    else
+        echo "  venv module not available. Installing pip via get-pip.py..."
+        curl -sS https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py
+        $PYTHON /tmp/get-pip.py --user &>/dev/null
+        echo "  pip installed (user-level)."
+    fi
+fi
+
+# Determine which pip to use
+if [ -f ".venv/bin/pip" ]; then
+    PIP=".venv/bin/pip"
+    echo "  Using virtual environment pip: $PIP"
+elif $PYTHON -m pip --version &>/dev/null; then
+    PIP="$PYTHON -m pip"
+else
+    echo "ERROR: Could not set up pip."
+    echo "Try: sudo apt install python3-pip python3-venv"
+    exit 1
+fi
+
+# Install the packages
+echo "  Installing chromadb, ollama, unstructured, pypdf..."
+if $PIP install chromadb ollama unstructured pypdf 2>&1 | grep -q "externally-managed"; then
+    echo "  Detected externally-managed environment. Using --break-system-packages..."
+    $PIP install --break-system-packages chromadb ollama unstructured pypdf
 fi
 echo "  Python packages installed successfully."
 
@@ -65,7 +105,6 @@ echo ""
 echo "=== Setup Complete ==="
 echo ""
 echo "Next steps:"
-echo "  1. Pull a chat model:  ollama pull qwen2.5-coder"
-echo "  2. Build wiki:          go build -o wiki ."
-echo "  3. Run:                ./wiki"
+echo "  1. Build wiki:  go build -o wiki ."
+echo "  2. Run:         ./wiki"
 echo ""
