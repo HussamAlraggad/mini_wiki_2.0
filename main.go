@@ -5,6 +5,7 @@
 //   wiki --ollama http://...       # Custom Ollama endpoint
 //   wiki --no-start                # Don't auto-start Ollama
 //   wiki --select                 # Run inline (allows text selection with mouse)
+//   wiki --no-start               # Fail if Ollama not running (don't auto-start)
 //
 // Commands (inside the TUI):
 //   /help          Show commands
@@ -13,6 +14,7 @@
 //   /refresh       Reload model list from Ollama
 //   /clear         Clear conversation
 //   /system <text> Set system prompt
+//   /clip          Copy viewport text to system clipboard
 //   /exit          Quit
 package main
 
@@ -41,7 +43,7 @@ func main() {
 	// Command-line flags
 	ollamaEndpoint := flag.String("ollama", "", "Ollama API endpoint (default: http://127.0.0.1:11434)")
 	noAutoStart := flag.Bool("no-start", false, "Don't auto-start Ollama; fail if not running")
-	inlineMode := flag.Bool("select", false, "Run inline so you can select/copy text with mouse")
+	inlineMode := flag.Bool("select", false, "Run inline (lets you select/copy text with mouse; use /clip in alt screen)")
 	flag.Parse()
 
 	// --- Initialize config ---

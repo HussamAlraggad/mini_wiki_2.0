@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/atotto/clipboard"
+
 	"mini-wiki/internal/chart"
 	"mini-wiki/internal/config"
 	"mini-wiki/internal/conversation"
@@ -1534,6 +1536,19 @@ Memory & RAG:
 		a.statusMsg = "Cancelled"
 		return a, nil
 
+	case "/clip":
+		content := a.viewportContent
+		if content == "" {
+			a.appendLine("Nothing to copy.")
+			return a, nil
+		}
+		if err := clipboard.WriteAll(content); err != nil {
+			a.appendLine(fmt.Sprintf("Copy failed: %v", err))
+			return a, nil
+		}
+		a.appendLine(fmt.Sprintf("Copied %d characters to clipboard.", len(content)))
+		return a, nil
+
 	case "/exit":
 		return a, tea.Quit
 
@@ -2274,6 +2289,7 @@ var commandList = []suggestionItem{
 	{text: "/embed", description: "Embed active dataset for RAG search (slow)", category: "cmd"},
 	{text: "/wizard", description: "Run system check and setup assistant", category: "cmd"},
 	{text: "/srs", description: "Run SRS generation pipeline", category: "cmd"},
+	{text: "/clip", description: "Copy viewport text to clipboard", category: "cmd"},
 	{text: "/cancel", description: "Cancel current RAG operation", category: "cmd"},
 	{text: "/exit", description: "Quit the application", category: "cmd"},
 }
