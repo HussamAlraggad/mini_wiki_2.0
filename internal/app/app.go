@@ -4,7 +4,6 @@
 package app
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"os"
@@ -2831,6 +2830,7 @@ func ingestLocalCmd(a *Application, path string) tea.Cmd {
 }
 
 // countFileRows quickly counts the number of rows in a file without parsing fully.
+// Uses a buffered reader to count newlines -- handles arbitrarily long lines.
 func countFileRows(path, format string) int {
 	switch format {
 	case "jsonl", "csv", "txt":
@@ -2839,27 +2839,22 @@ func countFileRows(path, format string) int {
 			return 0
 		}
 		defer f.Close()
-		// Increase scanner buffer to handle long lines (e.g., CSV with large text fields).
-		// Default is 64KB; bump to 1MB.
-		const maxLineSize = 1 * 1024 * 1024
-		scanner := bufio.NewScanner(f)
-		buf := make([]byte, maxLineSize)
-		scanner.Buffer(buf, maxLineSize)
 
 		count := 0
-		for scanner.Scan() {
-			line := strings.TrimSpace(scanner.Text())
-			if line != "" {
-				count++
+		const bufSize = 64 * 1024 // 64KB read buffer (doesn't limit line length)
+		buf := make([]byte, bufSize)
+		for {
+			n, err := f.Read(buf)
+			if n > 0 {
+				for _, b := range buf[:n] {
+					if b == '\n' {
+						count++
+					}
+				}
 			}
-		}
-		// Check for scanner errors (e.g., line too long)
-		if err := scanner.Err(); err != nil {
-			// If we got at least some rows, report partial count
-			if count > 0 {
-				return count
+			if err != nil {
+				break
 			}
-			return 0
 		}
 		return count
 
