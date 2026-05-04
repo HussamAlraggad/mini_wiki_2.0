@@ -94,8 +94,8 @@ def main():
                     send_response({"type": "error", "message": f"File not found: {path}"})
                     continue
 
-                chunk_size = cmd.get("chunk_size", 800)
-                overlap = cmd.get("overlap", 100)
+                chunk_size = cmd.get("chunk_size", 4000)
+                overlap = cmd.get("overlap", 400)
 
                 # Use specified model if provided, otherwise default
                 current_embedder = embedder

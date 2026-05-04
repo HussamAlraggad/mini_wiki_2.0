@@ -107,8 +107,8 @@ def ingest_file(
     path: str,
     embedder: Embedder,
     vector_db: VectorDB,
-    chunk_size: int = 800,
-    overlap: int = 100,
+    chunk_size: int = 4000,
+    overlap: int = 400,
     progress_callback=None,
 ) -> IngestionResult:
     """Ingest a single file into the vector database.
@@ -159,61 +159,87 @@ def ingest_file(
         return IngestionResult(path=path, error=str(e), progress=progress)
 
 
+def count_lines_in_file(path: str) -> int:
+    """Quickly count non-empty lines in a file (same as countFileRows in Go)."""
+    count = 0
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if line.strip():
+                    count += 1
+    except Exception:
+        pass
+    return count
+
+
 def ingest_large_text_file(
     path: str,
     embedder: Embedder,
     vector_db: VectorDB,
-    chunk_size: int = 800,
-    overlap: int = 100,
+    chunk_size: int = 4000,
+    overlap: int = 400,
     progress_callback=None,
 ) -> IngestionResult:
-    """Ingest a large text file (CSV, JSONL) line-by-line to save memory.
+    """Ingest a large text file (CSV, JSONL) one line at a time.
 
-    Only loads a batch of lines at a time, processes them, then frees memory.
-    Calls progress_callback(msg) after each batch for real-time progress.
+    Each line is chunked and embedded independently. This ensures chunks
+    never cross record boundaries and gives accurate progress tracking.
+    Shows estimated time remaining based on per-line timing.
     """
-    logger.info(f"Ingesting large file in streaming mode: {path}")
-    total_chunks = 0
+    logger.info(f"Ingesting large file one line at a time: {path}")
     source_name = os.path.basename(path)
     progress = []
 
+    # Count total lines for progress (fast: 1.1GB in <1s)
+    total_lines = count_lines_in_file(path)
+    if total_lines == 0:
+        return IngestionResult(path=path, error="File is empty", progress=progress)
+
+    if progress_callback:
+        progress_callback(f"File has {total_lines} lines. Embedding each line independently...")
+
+    total_chunks = 0
+    start_time = time.time()
+    line_count = 0
+    embedded_chunks_total = 0
+
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
-            line_count = 0
-            batch_text = ""
-
             for line in f:
                 line = line.strip()
                 if not line:
                     continue
                 line_count += 1
-                batch_text += line + "\n"
 
-                # Process in batches of 200 lines
-                if line_count % 200 == 0:
-                    # Send progress BEFORE embedding (embedding is slow)
-                    if progress_callback:
-                        progress_callback(f"Processing {min(line_count, 200)} lines...")
-                    chunks = chunk_text(batch_text, chunk_size=chunk_size, overlap=overlap)
-                    if chunks:
-                        if progress_callback:
-                            progress_callback(f"Embedding {len(chunks)} chunks...")
-                        n = _embed_and_store(path, source_name, chunks, embedder, vector_db, progress_callback)
-                        total_chunks += n
-                    batch_text = ""  # Free memory
-                    msg = f"  Processed {line_count} lines, {total_chunks} chunks so far"
-                    logger.info(msg)
-                    if progress_callback:
-                        progress_callback(msg)
-
-            # Process remaining
-            if batch_text.strip():
+                # Show progress before each line (updates the idle timer)
                 if progress_callback:
-                    progress_callback("Processing final batch...")
-                chunks = chunk_text(batch_text, chunk_size=chunk_size, overlap=overlap)
-                if chunks:
-                    n = _embed_and_store(path, source_name, chunks, embedder, vector_db, progress_callback)
-                    total_chunks += n
+                    elapsed = time.time() - start_time
+                    if elapsed > 0 and line_count > 1:
+                        rate = (line_count - 1) / elapsed
+                        remaining = (total_lines - line_count + 1) / rate
+                        eta = ""
+                        if remaining > 60:
+                            eta = f" (est. {remaining/60:.0f}m remaining)"
+                        else:
+                            eta = f" (est. {remaining:.0f}s remaining)"
+                        progress_callback(f"Line {line_count}/{total_lines}, {total_chunks} chunks{eta}")
+                    else:
+                        progress_callback(f"Line {line_count}/{total_lines}...")
+
+                # Chunk this single line
+                chunks = chunk_text(line, chunk_size=chunk_size, overlap=overlap)
+                if not chunks:
+                    continue
+
+                # Embed and store this line's chunks
+                n = _embed_and_store(path, source_name, chunks, embedder, vector_db, progress_callback)
+                total_chunks += n
+                embedded_chunks_total += len(chunks)
+
+        msg = f"  Finished: {line_count} lines, {total_chunks} chunks indexed"
+        logger.info(msg)
+        if progress_callback:
+            progress_callback(msg)
 
     except MemoryError:
         logger.warning(f"Memory error at line {line_count}. Committing {total_chunks} chunks so far.")
