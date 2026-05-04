@@ -2730,19 +2730,39 @@ func (a *Application) ensureRAGStarted() string {
 	if _, err := os.Stat(workerPath); err != nil {
 		return fmt.Sprintf("RAG worker not found at %s", workerPath)
 	}
-	// Check for project-level virtual environment first
+	// Build list of Python candidates:
+	// 1. .venv/ in the CWD (project root)
+	// 2. .venv/ alongside the wiki binary itself
+	// 3. system python3 / python
 	rootDir := a.scanCfg.RootDir
 	var pythonCandidates []string
+
+	// CWD .venv
 	if rootDir != "" {
-		pythonCandidates = []string{
+		pythonCandidates = append(pythonCandidates,
 			filepath.Join(rootDir, ".venv", "bin", "python3"),
 			filepath.Join(rootDir, ".venv", "bin", "python"),
+		)
+	}
+
+	// Binary directory .venv (covers case where binary is in project dir)
+	if exe, err := os.Executable(); err == nil {
+		exeDir := filepath.Dir(exe)
+		if exeDir != rootDir {
+			pythonCandidates = append(pythonCandidates,
+				filepath.Join(exeDir, ".venv", "bin", "python3"),
+				filepath.Join(exeDir, ".venv", "bin", "python"),
+			)
 		}
 	}
+
+	// System fallbacks
 	pythonCandidates = append(pythonCandidates, "python3", "python")
 
 	var lastErr error
+	var triedPaths []string
 	for _, python := range pythonCandidates {
+		triedPaths = append(triedPaths, python)
 		if err := a.ragClient.Start(python, workerPath, a.pkb.ProjectDir(), "nomic-embed-text", a.models.Active(), "http://127.0.0.1:11434"); err != nil {
 			lastErr = err
 			continue
@@ -2750,22 +2770,23 @@ func (a *Application) ensureRAGStarted() string {
 		return ""
 	}
 	// Get detailed error from stderr if available
+	details := fmt.Sprintf("(tried: %s)", strings.Join(triedPaths, ", "))
 	if errMsg := a.ragClient.LastError(); errMsg != "" {
 		// Extract the most useful part of the error
 		lines := strings.Split(errMsg, "\n")
 		for _, line := range lines {
 			if strings.Contains(line, "ModuleNotFoundError") || strings.Contains(line, "Error") {
-				return fmt.Sprintf("Python error: %s", strings.TrimSpace(line))
+				return fmt.Sprintf("Python error: %s %s", strings.TrimSpace(line), details)
 			}
 		}
 		if len(lines) > 0 {
-			return fmt.Sprintf("Python: %s", strings.TrimSpace(lines[len(lines)-1]))
+			return fmt.Sprintf("Python: %s %s", strings.TrimSpace(lines[len(lines)-1]), details)
 		}
 	}
 	if lastErr != nil {
-		return fmt.Sprintf("RAG worker: %v", lastErr)
+		return fmt.Sprintf("RAG worker: %v %s", lastErr, details)
 	}
-	return "RAG worker failed to start (unknown error)"
+	return fmt.Sprintf("RAG worker failed to start (unknown error) %s", details)
 }
 
 // queryRAG queries the RAG worker for relevant context, returning sources and answer.
@@ -2818,16 +2839,27 @@ func countFileRows(path, format string) int {
 			return 0
 		}
 		defer f.Close()
-		count := 0
+		// Increase scanner buffer to handle long lines (e.g., CSV with large text fields).
+		// Default is 64KB; bump to 1MB.
+		const maxLineSize = 1 * 1024 * 1024
 		scanner := bufio.NewScanner(f)
+		buf := make([]byte, maxLineSize)
+		scanner.Buffer(buf, maxLineSize)
+
+		count := 0
 		for scanner.Scan() {
 			line := strings.TrimSpace(scanner.Text())
 			if line != "" {
 				count++
 			}
 		}
-		if count == 0 {
-			count = 1
+		// Check for scanner errors (e.g., line too long)
+		if err := scanner.Err(); err != nil {
+			// If we got at least some rows, report partial count
+			if count > 0 {
+				return count
+			}
+			return 0
 		}
 		return count
 
