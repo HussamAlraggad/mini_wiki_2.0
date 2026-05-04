@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -97,7 +98,14 @@ func (c *Client) Start(pythonPath, workerPath, wikiDir, embedModel, llmModel, ol
 	defer c.mu.Unlock()
 
 	cmd := exec.Command(pythonPath, workerPath)
+	// Inherit PATH from parent so the Python process can find system tools.
+	// The venv Python (pyvenv.cfg) handles site-packages automatically.
+	parentPath := os.Getenv("PATH")
+	if parentPath == "" {
+		parentPath = "/usr/bin:/bin"
+	}
 	cmd.Env = []string{
+		fmt.Sprintf("PATH=%s", parentPath),
 		fmt.Sprintf("WIKI_DIR=%s", wikiDir),
 		fmt.Sprintf("WIKI_EMBED_MODEL=%s", embedModel),
 		fmt.Sprintf("WIKI_LLM_MODEL=%s", llmModel),

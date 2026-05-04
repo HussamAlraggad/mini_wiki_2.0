@@ -20,8 +20,19 @@ import os
 import sys
 import traceback
 
-# Add parent directory to path so we can import rag_worker modules
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Debug: log which Python interpreter is running
+import_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, import_path)
+
+# Print diagnostics to stderr before imports so we can debug startup failures
+import io
+_diag = io.StringIO()
+_diag.write(f"[RAG worker] sys.executable: {sys.executable}\n")
+_diag.write(f"[RAG worker] sys.prefix: {sys.prefix}\n")
+_diag.write(f"[RAG worker] import path: {import_path}\n")
+_diag.write(f"[RAG worker] PYTHONPATH (first 3): {[p for p in sys.path[:3]]}\n")
+sys.stderr.write(_diag.getvalue())
+sys.stderr.flush()
 
 from rag_worker.embedder import Embedder
 from rag_worker.vectordb import VectorDB
