@@ -191,9 +191,14 @@ def ingest_large_text_file(
 
                 # Process in batches of 200 lines
                 if line_count % 200 == 0:
+                    # Send progress BEFORE embedding (embedding is slow)
+                    if progress_callback:
+                        progress_callback(f"Processing {min(line_count, 200)} lines...")
                     chunks = chunk_text(batch_text, chunk_size=chunk_size, overlap=overlap)
                     if chunks:
-                        n = _embed_and_store(path, source_name, chunks, embedder, vector_db)
+                        if progress_callback:
+                            progress_callback(f"Embedding {len(chunks)} chunks...")
+                        n = _embed_and_store(path, source_name, chunks, embedder, vector_db, progress_callback)
                         total_chunks += n
                     batch_text = ""  # Free memory
                     msg = f"  Processed {line_count} lines, {total_chunks} chunks so far"
@@ -203,9 +208,11 @@ def ingest_large_text_file(
 
             # Process remaining
             if batch_text.strip():
+                if progress_callback:
+                    progress_callback("Processing final batch...")
                 chunks = chunk_text(batch_text, chunk_size=chunk_size, overlap=overlap)
                 if chunks:
-                    n = _embed_and_store(path, source_name, chunks, embedder, vector_db)
+                    n = _embed_and_store(path, source_name, chunks, embedder, vector_db, progress_callback)
                     total_chunks += n
 
     except MemoryError:
@@ -249,6 +256,7 @@ def _embed_and_store(
     chunks: List[str],
     embedder: Embedder,
     vector_db: VectorDB,
+    progress_callback=None,
 ) -> int:
     """Embed chunks in batches and store in vector DB. Frees memory between batches."""
     all_embeddings = []
@@ -256,6 +264,10 @@ def _embed_and_store(
 
     for i in range(0, len(chunks), BATCH_SIZE):
         batch = chunks[i:i + BATCH_SIZE]
+        # Send progress every 10 batches to keep the Go idle timer alive
+        if i % (BATCH_SIZE * 10) == 0 and progress_callback:
+            done = min(i + BATCH_SIZE, len(chunks))
+            progress_callback(f"  Embedding {done}/{len(chunks)} chunks...")
         batch_embeddings = embedder.embed(batch)
         if not batch_embeddings:
             logger.warning(f"  Batch {i // BATCH_SIZE + 1}: embedding returned empty")

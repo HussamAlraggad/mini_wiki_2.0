@@ -1672,10 +1672,14 @@ func (a *Application) View() string {
 		suggestionText = suggestionStyle.Render(formatSuggestions(a.suggestions, a.tabIndex))
 	}
 
-	// Bottom bar: model info on the right
+	// Bottom bar: model info on the right, selection indicator on the left
 	modelInfo := fmt.Sprintf("  active: %s  |  tokens: %d  |  loaded: %d models",
 		a.models.Active(), a.estimatedTokens, len(a.models.Available()))
-	bottomBar := bottomRightStyle.Render(modelInfo)
+	selIndicator := ""
+	if a.mouseSelecting {
+		selIndicator = " [SELECTING] "
+	}
+	bottomBar := bottomRightStyle.Render(selIndicator + modelInfo)
 
 	// Layout: header(2) + sub(2) + panels(panelH-2) + overlay(0/1) + \n(1) + input(3) + \n(1) + bar(1) = h
 	//   = 4 + panelH - 2 + overlay + 1 + 3 + 1 + 1 = panelH + 8 + overlay
@@ -1708,6 +1712,9 @@ func (a *Application) View() string {
 	if a.streaming {
 		inputContent := fmt.Sprintf(" %s %s", a.spinner.View(), a.statusMsg)
 		inputRendered = inputBoxStyle.Width(w - 2).Render(inputContent)
+	} else if a.mouseSelecting {
+		// During mouse selection, the input box shows the selection prompt
+		inputRendered = inputBoxStyle.Width(w - 2).Render(" ── SELECTING ── release mouse button to copy text to clipboard")
 	} else {
 		inputLine := a.input.View()
 		if len(inputLine) > w-6 {

@@ -243,9 +243,9 @@ func (c *Client) IngestStream(path string, embedModel string, onProgress func(ms
 	}
 
 	// Use idle-progress timeout: if no progress message is received for
-	// 5 minutes, assume the process is hung and kill it. This lets large
+	// 15 minutes, assume the process is hung and kill it. This lets large
 	// files take as long as they need as long as they're making progress.
-	const idleTimeout = 5 * time.Minute
+	const idleTimeout = 15 * time.Minute
 	lastProgress := time.Now()
 	for {
 		// Set per-iteration timeout to idleTimeout from last progress
