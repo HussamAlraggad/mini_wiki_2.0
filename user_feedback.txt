@@ -1,0 +1,5 @@
+1- The converstation eperience is poor.
+2- the messages sent and the replies receieved must be show on separate lines.
+3- when I finished the injestion and embeding the chat started acting weird... instead of displaying my message it displays some weird code.
+4- when I auto complete a command (/) or a path (@), the message I gets removed!!!
+5- 
