@@ -6,7 +6,7 @@ Uses recursive character splitting with configurable chunk size and overlap.
 from typing import List
 
 
-def chunk_text(text: str, chunk_size: int = 4000, overlap: int = 400) -> List[str]:
+def chunk_text(text: str, chunk_size: int = 600, overlap: int = 80) -> List[str]:
     """Split text into overlapping chunks using recursive character splitting.
 
     Args:

@@ -55,12 +55,19 @@ class Embedder:
                 return result["embeddings"]
 
             except URLError as e:
+                # Get more detail from HTTP error response body
+                detail = str(e)
+                if hasattr(e, 'read'):
+                    try:
+                        detail = e.read().decode('utf-8', errors='replace')[:500]
+                    except Exception:
+                        pass
                 if attempt < 2:
                     wait = 1.0 * (attempt + 1)
-                    logger.warning(f"Embedding attempt {attempt + 1} failed: {e}. Retrying in {wait}s...")
+                    logger.warning(f"Embedding attempt {attempt + 1} failed: {detail}. Retrying in {wait}s...")
                     time.sleep(wait)
                 else:
-                    raise RuntimeError(f"Cannot reach Ollama at {self.base_url}: {e}")
+                    raise RuntimeError(f"Ollama error: {detail}")
             except json.JSONDecodeError as e:
                 raise RuntimeError(f"Invalid JSON from Ollama: {e}")
 

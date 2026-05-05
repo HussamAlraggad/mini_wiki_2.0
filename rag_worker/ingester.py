@@ -107,8 +107,8 @@ def ingest_file(
     path: str,
     embedder: Embedder,
     vector_db: VectorDB,
-    chunk_size: int = 4000,
-    overlap: int = 400,
+    chunk_size: int = 600,
+    overlap: int = 80,
     progress_callback=None,
 ) -> IngestionResult:
     """Ingest a single file into the vector database.
@@ -176,8 +176,8 @@ def ingest_large_text_file(
     path: str,
     embedder: Embedder,
     vector_db: VectorDB,
-    chunk_size: int = 4000,
-    overlap: int = 400,
+    chunk_size: int = 600,
+    overlap: int = 80,
     progress_callback=None,
 ) -> IngestionResult:
     """Ingest a large text file (CSV, JSONL) one line at a time.
