@@ -233,7 +233,7 @@ var (
 	bottomBarStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color("#4B5563")).
-			Padding(0, 2)
+			Padding(0, 1)
 
 	bottomRightStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#6B7280")).
@@ -1709,13 +1709,16 @@ func (a *Application) View() string {
 	leftInfo := fmt.Sprintf(" %s ", modelName)
 	rightInfo := fmt.Sprintf(" tokens: %d  |  models: %d ", a.estimatedTokens, len(a.models.Available()))
 
-	// Lay out left and right within the available width
+	// Lay out left and right within available width
+	// Inner area = (w - 2) - 2 (border) - 2 (padding) = w - 6
 	barContent := leftInfo
 	rightLen := lipgloss.Width(rightInfo)
-	padLen := w - lipgloss.Width(leftInfo) - rightLen - 4
+	leftLen := lipgloss.Width(leftInfo)
+	innerW := w - 6
+	padLen := innerW - leftLen - rightLen
 	if padLen > 0 {
 		barContent += strings.Repeat(" ", padLen) + rightInfo
-	} else {
+	} else if innerW > leftLen {
 		barContent += "  " + rightInfo
 	}
 	bottomBar := bottomBarStyle.Width(w - 2).Render(barContent)
