@@ -230,9 +230,18 @@ var (
 			Foreground(lipgloss.Color("#4B5563")).
 			Padding(0, 1)
 
+	bottomBarStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("#4B5563")).
+			Padding(0, 2)
+
 	bottomRightStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#6B7280")).
 			Padding(0, 1)
+
+	selHighlightStyle = lipgloss.NewStyle().
+			Background(lipgloss.Color("#334155")).
+			Foreground(lipgloss.Color("#E2E8F0"))
 
 	// Input box with subtle border
 	inputBoxStyle = lipgloss.NewStyle().
@@ -298,9 +307,13 @@ type Application struct {
 	mem        memory.MemStore
 	srsPipeline *srs.Pipeline
 
+	// Right info panel visibility
+	showInfoPanel bool // false = hidden, full width for chat
+
 	// Mouse selection state
 	mouseSelecting bool  // true when user is dragging to select text
 	mouseDragStart int   // Y position where drag started
+	mouseDragEnd   int   // current Y position during drag
 	mouseDragged    bool // true if mouse actually moved during drag
 
 	// UI components
@@ -383,7 +396,8 @@ func New(cfg *config.Manager, client ollama.Client, mm *modelmgr.Manager, ragWor
 		input:     ti,
 		spinner:   s,
 		statusMsg:   "Initializing...",
-		showWelcome: true,
+		showWelcome:   true,
+		showInfoPanel: true,
 		scanCfg: filescanner.ScannerConfig{
 			RootDir: rootDir,
 			MaxSize: 100 * 1024 * 1024,
@@ -1236,14 +1250,18 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case tea.MouseActionPress:
 				a.mouseSelecting = true
 				a.mouseDragStart = msg.Y
+				a.mouseDragEnd = msg.Y
 				a.mouseDragged = false
 				a.statusMsg = "Selecting... release to copy"
+				a.highlightSelection()
 				return a, nil
 
 			case tea.MouseActionMotion:
 				if a.mouseSelecting {
 					a.mouseDragged = true
+					a.mouseDragEnd = msg.Y
 					a.statusMsg = "Selecting... release to copy"
+					a.highlightSelection()
 				}
 				return a, nil
 
@@ -1251,6 +1269,8 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if a.mouseSelecting && a.mouseDragged {
 					a.mouseSelecting = false
 					a.mouseDragged = false
+					// Restore original viewport content (remove highlighting)
+					a.viewport.SetContent(a.viewportContent)
 					if a.viewportContent != "" {
 						n := len(a.viewportContent)
 						if err := clipboard.WriteAll(a.viewportContent); err == nil {
@@ -1596,6 +1616,15 @@ Memory & RAG:
 		a.appendLine(fmt.Sprintf("Copied %d characters to clipboard.", len(content)))
 		return a, nil
 
+	case "/panel":
+		a.showInfoPanel = !a.showInfoPanel
+		if a.showInfoPanel {
+			a.appendLine("Info panel shown.")
+		} else {
+			a.appendLine("Info panel hidden.")
+		}
+		return a, nil
+
 	case "/exit":
 		return a, tea.Quit
 
@@ -1672,14 +1701,24 @@ func (a *Application) View() string {
 		suggestionText = suggestionStyle.Render(formatSuggestions(a.suggestions, a.tabIndex))
 	}
 
-	// Bottom bar: model info on the right, selection indicator on the left
-	modelInfo := fmt.Sprintf("  active: %s  |  tokens: %d  |  loaded: %d models",
-		a.models.Active(), a.estimatedTokens, len(a.models.Available()))
-	selIndicator := ""
+	// Bottom bar: model name left, token info right, with border
+	modelName := a.models.Active()
 	if a.mouseSelecting {
-		selIndicator = " [SELECTING] "
+		modelName = "[SELECTING] " + modelName
 	}
-	bottomBar := bottomRightStyle.Render(selIndicator + modelInfo)
+	leftInfo := fmt.Sprintf(" %s ", modelName)
+	rightInfo := fmt.Sprintf(" tokens: %d  |  models: %d ", a.estimatedTokens, len(a.models.Available()))
+
+	// Lay out left and right within the available width
+	barContent := leftInfo
+	rightLen := lipgloss.Width(rightInfo)
+	padLen := w - lipgloss.Width(leftInfo) - rightLen - 4
+	if padLen > 0 {
+		barContent += strings.Repeat(" ", padLen) + rightInfo
+	} else {
+		barContent += "  " + rightInfo
+	}
+	bottomBar := bottomBarStyle.Width(w - 2).Render(barContent)
 
 	// Layout: header(2) + sub(2) + panels(panelH-2) + overlay(0/1) + \n(1) + input(3) + \n(1) + bar(1) = h
 	//   = 4 + panelH - 2 + overlay + 1 + 3 + 1 + 1 = panelH + 8 + overlay
@@ -1689,23 +1728,29 @@ func (a *Application) View() string {
 		panelH = 3
 	}
 
-	// Two panels: center (80%) + right (20%)
-	rightW := w * 20 / 100
-	if rightW < 18 {
-		rightW = 18
+	// Two panels: center (80%) + right (20%), or full width if panel hidden
+	rightW := 0
+	if a.showInfoPanel {
+		rightW = w * 20 / 100
+		if rightW < 18 {
+			rightW = 18
+		}
 	}
 	centerW := w - rightW
 
 	chatContent := a.renderChatPanel(centerW-2, panelH)
-	infoContent := a.renderInfoPanel(rightW)
-
-	rightSty := panelRightStyle
 	centerSty := panelCenterStyle
-
-	rightRendered := rightSty.Width(rightW).Height(panelH - 2).Render(infoContent)
 	centerRendered := centerSty.Width(centerW).Height(panelH - 2).Render(chatContent)
 
-	panelsRow := lipgloss.JoinHorizontal(lipgloss.Top, centerRendered, rightRendered)
+	var panelsRow string
+	if a.showInfoPanel {
+		infoContent := a.renderInfoPanel(rightW)
+		rightSty := panelRightStyle
+		rightRendered := rightSty.Width(rightW).Height(panelH - 2).Render(infoContent)
+		panelsRow = lipgloss.JoinHorizontal(lipgloss.Top, centerRendered, rightRendered)
+	} else {
+		panelsRow = centerRendered
+	}
 
 	// Input box (full width)
 	var inputRendered string
@@ -1892,6 +1937,45 @@ func (a *Application) appendLine(content string) {
 		content += "\n"
 	}
 	a.appendToViewport(content)
+}
+
+// highlightSelection modifies the viewport content to show visible
+// highlighting on the lines being selected by the user's mouse drag.
+func (a *Application) highlightSelection() {
+	if a.viewportContent == "" {
+		return
+	}
+	lines := strings.Split(a.viewportContent, "\n")
+	if len(lines) == 0 {
+		return
+	}
+
+	// Map mouse Y positions to content line numbers (accounting for scroll)
+	startLine := a.mouseDragStart + a.viewport.YOffset
+	endLine := a.mouseDragEnd + a.viewport.YOffset
+	if startLine > endLine {
+		startLine, endLine = endLine, startLine
+	}
+	if startLine < 0 {
+		startLine = 0
+	}
+	if endLine >= len(lines) {
+		endLine = len(lines) - 1
+	}
+
+	// Build highlighted content
+	var b strings.Builder
+	for i, line := range lines {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		if i >= startLine && i <= endLine {
+			b.WriteString(selHighlightStyle.Render(line))
+		} else {
+			b.WriteString(line)
+		}
+	}
+	a.viewport.SetContent(b.String())
 }
 
 func formatUserMsg(content string) string {
@@ -2344,6 +2428,7 @@ var commandList = []suggestionItem{
 	{text: "/wizard", description: "Run system check and setup assistant", category: "cmd"},
 	{text: "/srs", description: "Run SRS generation pipeline", category: "cmd"},
 	{text: "/clip", description: "Copy viewport text to clipboard", category: "cmd"},
+	{text: "/panel", description: "Toggle right info panel", category: "cmd"},
 	{text: "/cancel", description: "Cancel current RAG operation", category: "cmd"},
 	{text: "/exit", description: "Quit the application", category: "cmd"},
 }
