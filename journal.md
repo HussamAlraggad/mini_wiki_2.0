@@ -8,6 +8,41 @@
 
 ---
 
+## May 4 -- Bug fixes: row counting, newlines, RAG diagnostics, /clip (COMPLETE)
+
+### What was done
+- **Row counting fix**: Replaced `bufio.Scanner` (buffer-limited, silently failed on 12MB lines)
+  with chunked newline counting (handles any line length, any file size).
+- **Newline separation fix**: Added `appendLine()` method so TUI messages don't run together.
+  Streaming chunks still use `appendToViewport()` (no separator), all complete messages use
+  `appendLine()` (trailing \n).
+- **RAG worker diagnostics**: main.py now prints `sys.executable`, `sys.prefix`, `sys.path`
+  to stderr before imports. Captured by Go error handler so user can see which Python is
+  being used when the worker fails.
+- **PATH inheritance**: `ragClient.Start()` now includes parent process `PATH` in the
+  subprocess environment so Python can find system tools.
+- **/clip command**: Copies the entire viewport content to system clipboard via
+  `atotto/clipboard`. Added to auto-complete list and main.go help text.
+
+### Interface changes made
+- New method: `Application.appendLine()` -- appends with trailing \n
+- New method: `Application.appendToViewport()` -- raw append (for streaming only)
+
+### What I struggled with / broke
+- The `sed` bulk rename (`appendToViewport` → `appendLine`) was too aggressive. It renamed
+  the function definition itself and also mangled brace structure. Had to manually fix back.
+- The `if result.TotalSize > 0` block was accidentally deleted. Restored manually.
+
+### Test status
+```
+All 12 suites pass (chart, config, conversation, csvparser, dataset, fileref, filescanner, jsonlparser, modelmgr, ollama, ranking)
+```
+
+### Handoff to next agent
+- The /embed chromadb issue may still persist on the user's machine. The diagnostics added
+  to main.py will now print which Python is being used, making debugging possible.
+- Run `go build -o wiki . && cp wiki ~/.local/bin/wiki` after any changes.
+
 ## May 3 -- All Phases Complete (COMPLETE)
 
 ### What was done
