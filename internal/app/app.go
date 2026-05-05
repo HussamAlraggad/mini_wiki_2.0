@@ -187,100 +187,113 @@ type suggestionItem struct {
 	category    string // "cmd", "file", "ref"
 }
 
-// --- Styles ---
+// --- Tokyo Night theme ---
 
 var (
+	// Core palette
+	tokyoBg       = lipgloss.Color("#1a1b26")
+	tokyoSurface  = lipgloss.Color("#1f2335")
+	tokyoOverlay  = lipgloss.Color("#24283b")
+	tokyoFg       = lipgloss.Color("#c0caf5")
+	tokyoComment  = lipgloss.Color("#565f89")
+	tokyoBorder   = lipgloss.Color("#3b4261")
+	tokyoBlue     = lipgloss.Color("#7aa2f7")
+	tokyoCyan     = lipgloss.Color("#7dcfff")
+	tokyoGreen    = lipgloss.Color("#9ece6a")
+	tokyoOrange   = lipgloss.Color("#ff9e64")
+	tokyoPurple   = lipgloss.Color("#bb9af7")
+	tokyoRed      = lipgloss.Color("#f7768e")
+	tokyoYellow   = lipgloss.Color("#e0af68")
+
 	titleStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("#7C3AED")).
+			Foreground(tokyoPurple).
 			Padding(0, 1)
 
 	statusStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#6B7280")).
+			Foreground(tokyoComment).
 			Padding(0, 1)
 
 	userMsgStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#10B981"))
+			Foreground(tokyoGreen)
 
 	assistantHeaderStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#8B5CF6")).
+				Foreground(tokyoBlue).
 				Bold(true)
 
 	assistantMsgStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#E5E7EB"))
+				Foreground(tokyoFg)
 
 	errorStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#EF4444"))
+			Foreground(tokyoRed)
 
 	modelTagStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#8B5CF6")).
-			Background(lipgloss.Color("#1F2937")).
+			Foreground(tokyoPurple).
+			Background(tokyoSurface).
 			Padding(0, 1).
 			Bold(true)
 
 	helpStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#4B5563"))
+			Foreground(tokyoComment)
 
 	suggestionStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#D1D5DB")).
-			Background(lipgloss.Color("#1F2937")).
+			Foreground(tokyoFg).
+			Background(tokyoOverlay).
 			Padding(0, 1)
 
 	hintStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#4B5563")).
+			Foreground(tokyoComment).
 			Padding(0, 1)
 
 	bottomBarStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("#4B5563")).
+			BorderForeground(tokyoBorder).
 			Padding(0, 1)
 
 	bottomRightStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#6B7280")).
+			Foreground(tokyoComment).
 			Padding(0, 1)
 
 	selHighlightStyle = lipgloss.NewStyle().
-			Background(lipgloss.Color("#334155")).
-			Foreground(lipgloss.Color("#E2E8F0"))
+			Background(tokyoOverlay).
+			Foreground(tokyoCyan)
 
 	// Input box with subtle border
 	inputBoxStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("#4B5563")).
+			BorderForeground(tokyoBorder).
 			Padding(0, 1)
 
 	headerStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#E2E8F0")).
+			Foreground(tokyoFg).
 			Bold(true).
 			Padding(0, 2)
 
 	subHeaderStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#94A3B8")).
+			Foreground(tokyoComment).
 			Padding(0, 2)
 
-	// Panel styles (center + right only)
+	// Panel styles
 	panelCenterStyle = lipgloss.NewStyle().
 			Padding(0, 1)
 
 	panelRightStyle = lipgloss.NewStyle().
-			Background(lipgloss.Color("#1A1A2E")).
+			Background(tokyoSurface).
 			Padding(1, 2)
 
 	panelFocusStyle = lipgloss.NewStyle().
-			Background(lipgloss.Color("#1F2B47")).
+			Background(tokyoOverlay).
 			Padding(1, 2)
 
 	panelHeaderStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("#CBD5E1"))
+			Foreground(tokyoBlue)
 
 	infoLabelStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#64748B"))
+			Foreground(tokyoComment)
 
 	infoValueStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#CBD5E1"))
-
-	// Bottom bar styles
+			Foreground(tokyoFg)
 )
 
 // --- Application Model ---
@@ -369,7 +382,7 @@ func New(cfg *config.Manager, client ollama.Client, mm *modelmgr.Manager, ragWor
 	ti.Width = 80
 
 	s := spinner.New()
-	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("#7C3AED"))
+	s.Style = lipgloss.NewStyle().Foreground(tokyoPurple)
 	s.Spinner = spinner.Dot
 
 	// Determine workspace root from CWD
