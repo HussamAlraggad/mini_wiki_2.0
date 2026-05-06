@@ -66,7 +66,7 @@ type Config struct {
 // DefaultConfig returns sensible defaults for ranking.
 func DefaultConfig() Config {
 	return Config{
-		Model:   "qwen2.5-coder",
+		Model:   "llama3.1:8b",
 		MaxRows: 10000,
 	}
 }
@@ -119,7 +119,7 @@ func (r *ranker) ScoreAll(ctx context.Context, data *dataset.Dataset, topic stri
 	scores := make([]float64, len(rows))
 	model := r.cfg.Model
 	if model == "" {
-		model = "qwen2.5-coder"
+		model = "llama3.1:8b"
 	}
 
 	for i, row := range rows {

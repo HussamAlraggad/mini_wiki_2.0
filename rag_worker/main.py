@@ -56,7 +56,7 @@ def main():
     # Read config from environment
     wiki_dir = os.environ.get("WIKI_DIR", os.getcwd())
     embed_model = os.environ.get("WIKI_EMBED_MODEL", "nomic-embed-text")
-    llm_model = os.environ.get("WIKI_LLM_MODEL", "qwen2.5-coder")
+    llm_model = os.environ.get("WIKI_LLM_MODEL", "llama3.1:8b")
     ollama_url = os.environ.get("WIKI_OLLAMA_URL", "http://127.0.0.1:11434")
 
     rag_dir = os.path.join(wiki_dir, ".wiki", "rag")

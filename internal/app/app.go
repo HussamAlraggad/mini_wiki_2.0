@@ -2158,7 +2158,7 @@ func wizardCmd() tea.Cmd {
 		b.WriteString("\n=== Recommendations ===\n")
 		// Check if models are pulled
 		b.WriteString("Recommended: ollama pull nomic-embed-text\n")
-		b.WriteString("Recommended: ollama pull qwen2.5-coder\n")
+		b.WriteString("Recommended: ollama pull llama3.1:8b\n")
 		b.WriteString("First time: bash setup.sh\n")
 
 		return WizardComplete{Text: b.String()}

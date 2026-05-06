@@ -30,7 +30,7 @@ def query(
     question: str,
     embedder: Embedder,
     vector_db: VectorDB,
-    llm_model: str = "qwen2.5-coder",
+    llm_model: str = "llama3.1:8b",
     top_k: int = 5,
     system_prompt: str = None,
     ollama_base: str = "http://127.0.0.1:11434",

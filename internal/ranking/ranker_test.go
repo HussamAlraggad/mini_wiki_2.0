@@ -257,8 +257,8 @@ func TestDetectColumnTypes(t *testing.T) {
 
 func TestDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig()
-	if cfg.Model != "qwen2.5-coder" {
-		t.Errorf("expected default model qwen2.5-coder, got %s", cfg.Model)
+	if cfg.Model != "llama3.1:8b" {
+		t.Errorf("expected default model llama3.1:8b, got %s", cfg.Model)
 	}
 	if cfg.MaxRows != 10000 {
 		t.Errorf("expected MaxRows=10000, got %d", cfg.MaxRows)
