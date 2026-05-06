@@ -592,6 +592,9 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		content = strings.Join(ragParts, "\n") + "\n\nUser question: " + content
 	}
 
+	// Compact thread if context window is getting full
+	a.compactThreadIfNeeded()
+
 	// Add user message to thread
 	a.thread.Add(conversation.Message{
 		Role:    conversation.RoleUser,
@@ -1070,7 +1073,7 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		a.input.Focus()
 		a.streamContent.Reset()
-		a.appendToViewport("") // trailing newline
+		a.appendToViewport("\n") // blank line after AI response
 		return a, nil
 
 	case StreamError:
@@ -1978,7 +1981,7 @@ func (a *Application) highlightSelection() {
 }
 
 func formatUserMsg(content string) string {
-	return "---\n" + userMsgStyle.Render("You: ") + content + "\n"
+	return "\n───\n" + userMsgStyle.Render("You: ") + content + "\n"
 }
 
 // --- Commands (tea.Cmd factories) ---
@@ -3077,6 +3080,74 @@ func (a *Application) embedStream(filePath string) {
 		return
 	}
 	p.Send(RAGDone{Path: filePath, Chunks: chunks})
+}
+
+// compactThreadIfNeeded summarizes old messages when the context window is >70% full.
+// This preserves conversation flow without hitting token limits.
+func (a *Application) compactThreadIfNeeded() {
+	if a.thread == nil {
+		return
+	}
+
+	// Check if we're over 70% of the context window
+	maxTokens := a.thread.MaxTokens
+	if maxTokens <= 0 {
+		maxTokens = 4096
+	}
+	threshold := maxTokens * 70 / 100
+	if a.thread.EstimatedTokens() < threshold {
+		return // still plenty of room
+	}
+
+	// Keep the last 4 messages intact, summarize everything before that
+	msgs := a.thread.Messages
+	if len(msgs) <= 4 {
+		return
+	}
+
+	oldMsgs := msgs[:len(msgs)-4]
+	recentMsgs := msgs[len(msgs)-4:]
+
+	// Build text to summarize
+	var summaryText strings.Builder
+	summaryText.WriteString("Summarize this conversation history. Keep: research topic, key findings, user goals, important numbers, and any decisions made.\n\nHistory:\n")
+	for _, m := range oldMsgs {
+		prefix := "User: "
+		if m.Role == conversation.RoleAssistant {
+			prefix = "Assistant: "
+		}
+		text := m.Content
+		if len(text) > 500 {
+			text = text[:500] + "..."
+		}
+		summaryText.WriteString(prefix + text + "\n")
+	}
+
+	// Call LLM for summarization
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	summary, err := (&srsLLMAdapter{client: a.client}).Generate(ctx, a.models.Active(), summaryText.String())
+	if err != nil {
+		// If summarization fails, just trim old messages silently
+		msg := fmt.Sprintf("[Previous conversation compacted — %d messages summarized]", len(oldMsgs))
+		a.thread.Messages = append([]conversation.Message{{
+			Role:    conversation.RoleSystem,
+			Content: msg,
+		}}, recentMsgs...)
+		return
+	}
+
+	if len(summary) > 800 {
+		summary = summary[:800] + "..."
+	}
+
+	compacted := fmt.Sprintf("[Conversation summary from previous %d messages]: %s", len(oldMsgs), summary)
+	a.thread.Messages = append([]conversation.Message{{
+		Role:    conversation.RoleSystem,
+		Content: compacted,
+	}}, recentMsgs...)
+
+	a.appendLine("  [Conversation compacted — old messages summarized]")
 }
 
 // Update the skills to mark SRS skills as implemented.
