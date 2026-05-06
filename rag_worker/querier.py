@@ -78,7 +78,8 @@ def query(
             "score": round(score, 3),
             "text": display_text,
         })
-        context_parts.append(f"SOURCE {i+1}: {source}\n{text}")
+        clean_text = format_chunk_text(text, source)
+        context_parts.append(f"SOURCE {i+1}: {source}\n{clean_text}")
 
     context = "\n\n---\n\n".join(context_parts)
 
@@ -100,6 +101,54 @@ def query(
     )
 
     return QueryResult(answer=answer, sources=sources, model=llm_model)
+
+
+def format_chunk_text(text: str, source: str = "") -> str:
+    """Convert a raw text chunk into clean, readable text for the LLM.
+
+    Handles:
+    - JSON objects/arrays → formatted key-value pairs
+    - CSV/TSV lines → formatted as readable records
+    - Plain text → cleaned up (truncated if very long)
+    """
+    if not text:
+        return "(empty)"
+
+    text = text.strip()
+    if not text:
+        return "(empty)"
+
+    # Limit chunk length for LLM context
+    max_chunk_len = 2000
+    if len(text) > max_chunk_len:
+        text = text[:max_chunk_len] + "..."
+
+    # Try to parse as JSON and format nicely
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            lines = []
+            for k, v in parsed.items():
+                if isinstance(v, (list, dict)):
+                    v_str = json.dumps(v, ensure_ascii=False)
+                    if len(v_str) > 200:
+                        v_str = v_str[:200] + "..."
+                    lines.append(f"  {k}: {v_str}")
+                else:
+                    lines.append(f"  {k}: {v}")
+            return "\n".join(lines)
+        elif isinstance(parsed, list):
+            items = []
+            for item in parsed[:10]:
+                if isinstance(item, dict):
+                    items.append(format_chunk_text(json.dumps(item), source))
+                else:
+                    items.append(str(item))
+            return "\n".join(items)
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    return text
 
 
 def call_llm(

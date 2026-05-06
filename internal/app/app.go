@@ -522,6 +522,7 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// --- User sends a message ---
 	case UserSendMsg:
 		content := strings.TrimSpace(msg.Content)
+		originalContent := content // save for display (before RAG injection)
 		if content == "" {
 			return a, nil
 		}
@@ -578,39 +579,17 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			})
 		}()
 
-		// Retrieve relevant memory from past conversations (non-blocking)
-		memoryCtx, memoryCancel := context.WithTimeout(context.Background(), 3*time.Second)
-		pastEntries, _ := a.pkb.SearchHistory(memoryCtx, content, 3)
-		memoryCancel()
-		if len(pastEntries) > 0 {
-			var memParts []string
-			memParts = append(memParts, "\n[Previous relevant context from past sessions:]")
-			for _, e := range pastEntries {
-				if e.Response != "" {
-					memParts = append(memParts, "Q: "+e.Query)
-					if len(e.Response) > 200 {
-						memParts = append(memParts, "A: "+e.Response[:200]+"...")
-					} else {
-						memParts = append(memParts, "A: "+e.Response)
-					}
-				}
-			}
-			memParts = append(memParts, "[/End of past context]\n")
-			content = strings.Join(memParts, "\n") + "\n\nCurrent question: " + content
-	}
-
-	// Auto-RAG: search the vector database for relevant context (non-blocking)
+	// Auto-RAG: search the vector database for relevant context
+	// (silently injects into the prompt, does NOT appear in chat display)
 	ragResult, _ := a.queryRAG(content, 3)
 	if ragResult != nil && len(ragResult.Sources) > 0 {
 		var ragParts []string
-		ragParts = append(ragParts, "\n[Retrieved from knowledge base:]")
+		ragParts = append(ragParts, "\n[Context from knowledge base:]")
 		for _, src := range ragResult.Sources {
-			ragParts = append(ragParts, fmt.Sprintf("  Source: %s (score: %.2f)", src.File, src.Score))
-			ragParts = append(ragParts, "  "+src.Text)
+			ragParts = append(ragParts, fmt.Sprintf("Source %s (relevance: %.2f):", src.File, src.Score))
+			ragParts = append(ragParts, src.Text)
 		}
-		ragParts = append(ragParts, "[/End of retrieved context]\n")
-		content = strings.Join(ragParts, "\n") + "\n\nQuestion: " + content
-		a.appendLine(fmt.Sprintf("[RAG: %d sources retrieved]", len(ragResult.Sources)))
+		content = strings.Join(ragParts, "\n") + "\n\nUser question: " + content
 	}
 
 	// Add user message to thread
@@ -620,8 +599,8 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	})
 	a.updateTokenCount()
 
-	// Render user message in viewport
-	a.appendLine(formatUserMsg(content))
+	// Render user message in viewport (original text, not RAG-injected)
+	a.appendLine(formatUserMsg(originalContent))
 
 	// Clear input and start streaming
 	a.input.SetValue("")
@@ -1219,20 +1198,24 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Trigger completion for commands, @file refs, or path-like input
 			if strings.HasPrefix(val, "/") || strings.Contains(val, "@") ||
 				strings.HasPrefix(val, ".") || strings.Contains(val, "/") {
-				// If we already have suggestions, cycle; otherwise compute
 				if len(a.suggestions) > 0 && a.tabIndex >= 0 {
 					a.cycleSuggestion(val)
-				} else {
-					a.updateSuggestions()
-					if len(a.suggestions) > 0 {
-						a.tabIndex = 0
-						selected := a.suggestions[0].text
-						a.input.SetValue(selected + " ")
-						a.input.SetCursor(len(selected) + 1)
-					}
+					return a, nil
 				}
-				return a, nil
+				a.updateSuggestions()
+				if len(a.suggestions) > 0 {
+					a.tabIndex = 0
+					selected := a.suggestions[0].text
+					a.input.SetValue(selected + " ")
+					a.input.SetCursor(len(selected) + 1)
+					return a, nil
+				}
 			}
+			// No suggestions or not a completion context: forward Tab to input
+			var cmd tea.Cmd
+			a.input, cmd = a.input.Update(msg)
+			_ = cmd
+			return a, nil
 		}
 
 		// Handle Ctrl+C / Ctrl+D to quit (only when not streaming/busy)
@@ -1995,7 +1978,7 @@ func (a *Application) highlightSelection() {
 }
 
 func formatUserMsg(content string) string {
-	return userMsgStyle.Render("You: ") + content + "\n"
+	return "---\n" + userMsgStyle.Render("You: ") + content + "\n"
 }
 
 // --- Commands (tea.Cmd factories) ---
