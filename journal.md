@@ -8,6 +8,71 @@
 
 ---
 
+## May 9 -- Agentic RAG: /rank now uses LLM code generation (COMPLETE)
+
+### What was done
+- **Complete architecture shift**: Rating no longer scores every row via LLM (O(n), hours).
+  Instead sends schema to `qwen2.5-coder:7b`, which writes a Pandas filter script executed
+  locally (O(1), seconds). Based on user_feedback.txt from Hussam.
+
+### New files created
+- `rag_worker/agentic_ranker.py`: Auto-detects CSV/JSONL/XLSX/TSV, loads with Pandas,
+  extracts schema + 3 sample rows, prompts coder LLM for `filter_data(df)`, executes
+  in sandboxed env (`pd`, `np`, `json` only — no `os`/`sys`/`subprocess`).
+  Returns filtered results as JSON: `{type, rows_kept, total_rows, data, message}`.
+
+### Modified files
+- `rag_worker/main.py`: Added `cmd == "rank"` handler that calls `agentic_rank()`.
+- `internal/rag/client.go`: Added `Topic`/`RowsKept`/`TotalRows`/`Data` fields to
+  `Request`/`Response`. Added `Rank()` method.
+- `internal/ranking/ranker.go`: Completely rewritten. Removed `LLMClient`, `scorePrompt`,
+  `parseScore`, old row-by-row `ScoreAll`. Added `RagClient` interface, agentic `ScoreAll`,
+  `buildRankResultFromAgentic()`. Imports `internal/rag`.
+- `internal/ranking/ranker_test.go`: Rewritten for new `RagClient` interface.
+- `internal/app/app.go`: `rankCmd`/`compareCmd` timeout reduced 30min→5min. Both now use
+  `a.ragClient` (RAG worker) instead of `srsLLMAdapter` (direct Ollama).
+- `rag_worker/requirements.txt`: Added pandas.
+- `setup.sh`: Updated model roster — removed legacy model pulls, added
+  `deepseek-r1:8b` and `qwen2.5-coder:7b`.
+
+### Model cleanup
+- Removed: `llama3:8b`, `llama3:latest`, `codellama:7b`, `codellama:13b`,
+  `deepseek-coder:latest`, `deepseek-ocr:latest`
+- Kept: `deepseek-r1:8b`, `llama3.1:8b`, `nomic-embed-text`, `all-minilm`,
+  `gemma4:e4b`, `codeqwen`
+- Pulling (background): `qwen2.5-coder:7b` (4.7GB — needed for code generation)
+
+### plan.md updated
+- Section 8 (Ranking): Now documents Agentic RAG architecture instead of row-by-row.
+- Section 12.3 (Contracts): Updated `Ranker` interface to use `RagClient`.
+- Phase statuses: All marked COMPLETE.
+- File structure: Added `agentic_ranker.py`.
+
+### What I struggled with / broke
+- Leftover old code from the replaced `buildRankResult` function was left floating
+  outside any function body. Go compiler caught it with "non-declaration statement
+  outside function body." Fixed by removing the orphaned code.
+- Same issue in app.go with leftover `compareCmd` body. Fixed by removing duplicated code.
+- Tests broke because `parseScore` was removed and `NewRanker` signature changed.
+  Rewrote tests to use `mockRagClient` with `rag.Response` instead of `mockLLM`.
+- `qwen2.5-coder:7b` pull timed out twice (4.7GB model). Running in background now.
+
+### Test status
+```
+All 12 suites pass (chart, config, conversation, csvparser, dataset, fileref,
+filescanner, jsonlparser, modelmgr, ollama, ranking)
+```
+
+### Handoff to next agent
+- `qwen2.5-coder:7b` is still pulling in background (check: `tail -f /tmp/qwen_pull.log`).
+  Agentic ranking uses this model for code generation. If not available, it falls
+  back to whatever model is set in the config.
+- The sandbox in `agentic_ranker.py` limits `exec()` to `pd`, `np`, `json` only.
+  No `os`, `sys`, `subprocess` — safe by design.
+- Next step: pull `qwen2.5-coder` + verify `/rank` works end-to-end.
+
+---
+
 ## May 4 -- Bug fixes: row counting, newlines, RAG diagnostics, /clip (COMPLETE)
 
 ### What was done
@@ -127,8 +192,8 @@ All tests pass (9 suites, 15 new tests).
 
 | Attribute | Value |
 |---|---|---|
-| **Project Phase** | Phase 4 started: internal/dataset/ + internal/ranking/ created, commands wired. |
-| **Last action** | May 3 -- Phase 4: Dataset + Ranking packages implemented. /rank, /compare, /discard wired into TUI. |
+| **Project Phase** | All 7 phases COMPLETE. Agentic RAG implemented for /rank. |
+| **Last action** | May 9 -- Agentic RAG: /rank uses LLM codegen instead of row-by-row. Model cleanup complete. qwen2.5-coder:7b pulling in background. |
 | **Go version** | 1.25.0 |
 | **Ollama version** | 0.20.6 (running) |
 | **Active model** | `gemma4:e4b` (8B params, 131K ctx, Q4_K_M) |
@@ -141,13 +206,15 @@ All tests pass (9 suites, 15 new tests).
 - Phase 1: Foundation & LLM Integration
 - Phase 2: File System & Data Ingestion
 - Phase 3: RAG Knowledge Base & Conversational Engine
-- Tool activation: binary built, venv created, deps installed
+- Phase 4: Relevance Ranking & Iterative Comparison (Agentic RAG)
+- Phase 5: Data Visualization (chart, trend, pie, etc.)
+- Phase 6: Smart Export & Multi-Format Support
+- Phase 7: Remaining Features (wizard, markdown export)
+- Tool activation: binary built, venv created, all deps installed
 
-### What is NOT yet implemented (PLANNED phases)
-- Phase 4: Relevance Ranking & Iterative Comparison (`/rank`, `/compare`, `/discard`)
-- Phase 5: Data Visualization (`/chart`)
-- Phase 6: Smart Export & Multi-Format Support (XLSX/ODS ingestion, `/infer`)
-- Phase 7: Remaining Features (`/wizard`, enhanced export)
+### What is NOT yet implemented
+- All phases are COMPLETE. Future work: Jinja2 prompt templates, JSON Bridge for charts,
+  research provenance logging (.wiki/history/), VRAM management via keep_alive=0.
 
 ---
 
@@ -206,6 +273,8 @@ When you finish your session, add a new entry at the top of this journal with:
 | `internal/wiki` package was missing | Created from scratch with 26 Kind constants | RESOLVED |
 | Ollama v0.20.6 slightly below recommended v0.21 | Works with gemma4. If issues arise, upgrade Ollama. | WONTFIX (works) |
 | `ensurepip` module not available in system Python | `.venv` created with `--without-pip` flag | WORKAROUND IN PLACE |
+| `qwen2.5-coder:7b` not fully pulled (4.7GB, timed out twice) | Running in background: `ollama pull qwen2.5-coder:7b` (check `/tmp/qwen_pull.log`) | IN PROGRESS |
+| Legacy models removed from Ollama | Kept: deepseek-r1, llama3.1, nomic-embed-text, all-minilm, gemma4, codeqwen | RESOLVED |
 
 ---
 

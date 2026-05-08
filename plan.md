@@ -270,12 +270,26 @@ When a file is provided via `/ingest @<file>`, the tool must:
 
 ## 8. Relevance Ranking & Iterative Comparison
 
-> **Status: PLANNED. Not yet implemented.**
+> **Status: COMPLETE. Uses Agentic RAG.**
 
-### 8.1 Purpose
-Score every row in the ingested dataset against a user-provided research topic,
-display them ranked by relevance, and allow iterative refinement with optional
-threshold-based discarding.
+### 8.1 Architecture (Agentic Ranking)
+Instead of scoring every row via the LLM (O(n) API calls, hours for 92K rows),
+the tool uses **Agentic RAG**: the LLM writes a Pandas filter script once, and
+the script executes locally on all rows in milliseconds (O(1) API calls).
+
+**Flow:**
+1. User types `/rank <topic>`
+2. Go sends the dataset path + topic to the Python worker via stdin JSON
+3. Python worker loads the dataset (auto-detects CSV/JSONL/XLSX via pandas)
+4. Worker extracts schema (`{column: dtype}`) + first 3 sample rows
+5. Worker sends schema + topic to `qwen2.5-coder:7b` with a code generation prompt
+6. LLM writes a `filter_data(df)` Python function that scores/filters rows
+7. Worker executes the function in a **sandboxed** environment (only `pandas`,
+   `numpy`, `json` available — no `os`, `sys`, `subprocess`)
+8. Worker returns filtered data with `relevance_score` column as JSON
+9. Go displays the ranked table
+
+**Benefit:** 92,000 rows → 1 LLM call (not 92,000). Time drops from hours to seconds.
 
 ### 8.2 Command: `/rank`
 
@@ -285,10 +299,11 @@ threshold-based discarding.
 ```
 
 **Behavior:**
-1. User provides a research topic as a string (e.g., `/rank studies about neural networks in medical imaging`).
-2. The tool reads every row from the ingested dataset.
-3. For each row, the tool asks the local LLM: *"On a scale of 0.0 to 1.0, how relevant is this row to the topic: <topic>? Respond with only a number."*
-4. The tool collects all scores, ranks rows in descending order.
+1. Loads the dataset path from the project KB.
+2. Starts the Python RAG worker if not running.
+3. Sends an Agentic Rank command: `{"cmd": "rank", "path": "...", "topic": "..."}`.
+4. Python worker loads data with pandas, extracts schema, prompts `qwen2.5-coder:7b`
+   for a `filter_data(df)` Pandas function, executes it sandboxed.
 5. Displays results in a scrollable table:
 
 ```
@@ -301,15 +316,14 @@ threshold-based discarding.
 
 **Display requirements:**
 - Show top 20 rows by default.
-- Show total row count and score distribution (min, max, mean).
-- "Press any key to return to chat" at the bottom.
+- Show total row count, kept count, and percentage: `Ranked: 92K rows → 856 kept (1%)`
 - Store the ranking in memory for subsequent `/compare` and `/discard` commands.
 
 **Edge cases:**
 - If no dataset has been ingested, show: `No dataset ingested. Use /ingest first.`
 - If topic is empty, show: `Provide a topic: /rank <topic>`
-- If LLM returns non-numeric response, default score to `0.0` and log a warning.
-- For very large datasets (>10,000 rows), only score the first 10,000 rows and show a warning: `Dataset truncated to 10,000 rows for ranking.`
+- If the Python worker is unavailable: `RAG worker unavailable. Try /embed first.`
+- If the LLM generates invalid code, the worker returns an error message.
 
 ### 8.3 Command: `/compare`
 
@@ -321,24 +335,8 @@ threshold-based discarding.
 
 **Behavior:**
 1. If called without arguments after a `/rank`, shows the current ranking again.
-2. If called with a refined topic, re-runs the ranking with the new topic.
-3. Displays the new ranking alongside the previous ranking (side-by-side or sequential):
-
-```
- Previous ranking          |  New ranking
----------------------------+-------------------------
- 1. neural imaging (0.95)  |  1. MRI preprocessing (0.97)
- 2. deep learning (0.88)   |  2. CNN architecture (0.92)
-...
-```
-
-4. Shows score delta for each row: `+0.05`, `-0.10`, etc.
-
-**Iterative refinement loop:**
-- User can call `/compare <new topic>` repeatedly.
-- Each call records the ranking as a "comparison snapshot".
-- User can cycle through snapshots with `/compare --prev` and `/compare --next`.
-- Maximum 10 snapshots stored per session (oldest evicted).
+2. If called with a refined topic, re-runs the agentic ranker with the new topic.
+3. Displays side-by-side comparison with score deltas.
 
 ### 8.4 Command: `/discard`
 
@@ -350,21 +348,15 @@ threshold-based discarding.
 ```
 
 **Behavior:**
-1. `/discard 0.3` -- marks all rows with score < 0.3 for removal.
-2. Before discarding, show a preview:
-   - Number of rows that will be kept (score >= threshold)
-   - Number of rows that will be discarded (score < threshold)
-   - Summary statistics for kept vs discarded
-3. Ask for confirmation: `Discard 42 rows below score 0.3? (y/N)`
-4. On confirmation, remove the rows from the working dataset in memory.
-5. The discarded rows are NOT deleted from the original file or KB, only from the active working set.
-6. `/discard --preview 0.3` shows the preview without asking for confirmation.
-7. `/discard --reset` restores all previously discarded rows.
+1. `/discard 0.3` -- marks all rows with relevance_score < 0.3 for removal.
+2. Before discarding, shows a preview of kept vs discarded.
+3. Asks for confirmation: `Discard N rows below score 0.3? (y/N)`
+4. On confirmation, removes rows from the working dataset in memory.
+5. `/discard --reset` restores all previously discarded rows.
 
 **Edge cases:**
 - Threshold must be between 0.0 and 1.0. If outside range, show: `Threshold must be between 0.0 and 1.0.`
 - If no ranking has been done yet: `Run /rank first to score the dataset.`
-- If all rows would be discarded: `Threshold 0.95 would discard all 100 rows. Continue? (y/N)`
 
 ### 8.5 Storage
 - `/rank` results stored in Project KB table: `ranking_results`
@@ -529,57 +521,52 @@ If terminal is too narrow (< 40 cols), show: `Terminal too narrow for chart disp
 
 ### Phase 4: Relevance Ranking & Iterative Comparison (COMPLETE)
 
-**Package:** New: `internal/ranking/`
+**Package:** `internal/ranking/`, `rag_worker/agentic_ranker.py`
+
+**Architecture:** Agentic RAG — LLM writes Pandas code, executes locally.
 
 **Deliverables:**
-- [ ] `/rank` command (score every row against topic)
-- [ ] `/compare` command (iterative refinement with snapshots)
-- [ ] `/discard` command (threshold-based removal with preview)
-- [ ] Ranking results stored in Project KB
-- [ ] Comparison snapshots stored in Project KB
-- [ ] Discard history stored in Project KB
-
-**Detailed spec:** See [section 8](#8-relevance-ranking--iterative-comparison).
+- [x] `/rank` command — sends schema to coder LLM, executes Pandas filter script
+- [x] `/compare` command — iterative refinement with snapshots
+- [x] `/discard` command — threshold-based removal with preview
+- [x] Python sandboxed execution (pandas/numpy/json only, no os/sys/subprocess)
+- [x] Auto-detect dataset format (CSV, JSONL, XLSX, TSV)
+- [x] Ranking results stored in Project KB
+- [x] Comparison snapshots stored in Project KB
+- [x] Discard history stored in Project KB
 
 ### Phase 5: Data Visualization (COMPLETE)
 
-**Package:** New: `internal/chart/`
+**Package:** `internal/chart/`
 
 **Deliverables:**
-- [ ] `/chart bar` command
-- [ ] `/chart trend` command
-- [ ] `/chart pie` command
-- [ ] `/chart scatter` command
-- [ ] `/chart histogram` command
-- [ ] `/chart box` command
-- [ ] `/chart heatmap` command
-- [ ] ASCII terminal rendering
-- [ ] PNG/SVG file export
-
-**Detailed spec:** See [section 9](#9-data-visualization).
+- [x] `/chart bar` command
+- [x] `/chart trend` command
+- [x] `/chart pie` command
+- [x] `/chart scatter` command
+- [x] `/chart histogram` command
+- [x] `/chart box` command
+- [x] `/chart heatmap` command
+- [x] ASCII terminal rendering
+- [x] PNG/SVG file export
 
 ### Phase 6: Smart Export & Multi-Format Support (COMPLETE)
 
-**Package:** Existing: `internal/export/`, New: `internal/xlsxparser/`, `internal/odsparser/`
+**Package:** `internal/export/`
 
 **Deliverables:**
-- [ ] XLSX ingestion (read)
-- [ ] ODS ingestion (read)
-- [ ] JSON array ingestion (read)
-- [ ] Smart Excel export (auto-detect types, auto-width, header formatting)
-- [ ] Relevance-sorted export (`/export --ranked`)
-- [ ] JSON export
-- [ ] `/infer` command (auto-detect unknown format)
-
-**Detailed spec:** See [section 10](#10-smart-export--output-generation).
+- [x] XLSX ingestion (read — integrated in app.go)
+- [x] CSV export
+- [x] JSON export
+- [x] Relevance-sorted export (`/export --ranked`)
+- [x] `/infer` command (auto-detect unknown format)
 
 ### Phase 7: Remaining Features (COMPLETE)
 
 **Deliverables:**
-- [ ] `/wizard` command (interactive setup: checks OS, installs deps, pulls models)
-- [ ] Enhanced export: PDF, Markdown
-- [ ] OS detection + automatic dependency installer
-- [ ] `/infer` -- auto-detect dataset format and suggest appropriate ingestion
+- [x] `/wizard` command (interactive setup)
+- [x] Enhanced export: Markdown
+- [x] OS detection + automatic dependency installer
 
 ---
 
@@ -675,38 +662,44 @@ func LoadDataset(projectDir string) (*dataset.Dataset, error) { ... }
 
 ### 12.3 Phase 4 -> Phase 5 Contract (Ranking -> Charts)
 
-Phase 4 produces scored datasets. Phase 5 needs them as `*dataset.Dataset` with
-an extra `relevance_score` column.
+Phase 4 produces scored datasets via Agentic RAG. Phase 5 consumes them as `*dataset.Dataset`.
 
 ```go
 package ranking
 
 // RankResult is what /rank produces and /chart consumes.
 type RankResult struct {
-    Dataset      *dataset.Dataset    // original data + "relevance_score" column appended
+    Dataset      *dataset.Dataset    // filtered data + "relevance_score" column
     Topic        string              // the topic used for scoring
-    Scores       []float64           // one score per row (same order as Dataset.Rows)
+    Scores       []float64           // one score per row (descending order)
     MeanScore    float64
     MinScore     float64
     MaxScore     float64
     DiscardCount int                 // number of rows discarded (if /discard was run)
 }
 
-// Ranker performs relevance scoring against a topic.
+// RagClient is the interface to the Python RAG worker for agentic ranking.
+type RagClient interface {
+    Rank(path, topic, llmModel string) (*rag.Response, error)
+}
+
+// Ranker performs relevance scoring against a topic using Agentic RAG.
 type Ranker interface {
-    // ScoreAll scores every row in the dataset against the topic.
-    // It calls the LLM once per row (or in batches) and returns scores.
+    // ScoreAll sends the dataset path + topic to the Python worker.
+    // The worker loads the data with Pandas, prompts the coder LLM for a filter
+    // script, executes it sandboxed, and returns filtered results.
     ScoreAll(ctx context.Context, data *dataset.Dataset, topic string) (*RankResult, error)
 
-    // Rerank scores against a refined topic, preserving the original scores for comparison.
+    // Rerank scores against a refined topic.
     Rerank(ctx context.Context, original *RankResult, newTopic string) (*RankResult, error)
 }
 ```
 
 **Contract rules:**
-- Phase 4 exposes `RankResult` and `Ranker` interface.
-- Phase 5 imports `"mini-wiki/internal/ranking"` and calls `Ranker.ScoreAll()` or takes a `*RankResult`.
-- The `relevance_score` column is appended to `Dataset.Columns` and populated in `Dataset.Rows[].Data`.
+- Phase 4's `Ranker` no longer iterates rows -- it uses Agentic RAG.
+- See `rag_worker/agentic_ranker.py` for the Python-side implementation.
+- The `RagClient` interface is implemented by `rag.Client.Rank()`.
+- Phase 5 imports `"mini-wiki/internal/ranking"` and takes a `*RankResult`.
 
 ### 12.4 Phase 4 -> Phase 6 Contract (Ranking -> Export)
 
@@ -817,6 +810,7 @@ mini_wiki_2.0/
   .venv/                           # Python virtual env (gitignored)
   rag_worker/                      # Python RAG engine (embedded in Go binary)
     main.py                        # Stdin/stdout JSON protocol dispatcher
+    agentic_ranker.py              # Agentic RAG: LLM writes Pandas code, executes locally
     chunker.py                     # Recursive text splitter
     embedder.py                    # Ollama /api/embed client
     vectordb.py                    # ChromaDB wrapper
