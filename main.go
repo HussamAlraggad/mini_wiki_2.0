@@ -7,12 +7,15 @@
 //   wiki --select                  # Inline mode (free text selection with mouse)
 //
 // Commands (inside the TUI):
-//   /help          Show commands
+//   /help          Show all commands
 //   /model <name>  Switch model
 //   /models        List available models
 //   /refresh       Reload model list from Ollama
 //   /clear         Clear conversation
 //   /system <text> Set system prompt
+//   /rank <topic>  Rank dataset by relevance (Agentic AI)
+//   /chart <type>  Visualize data (bar, trend, pie, scatter)
+//   /ingest <path> Read a file into context
 //   /clip          Copy viewport text to system clipboard
 //   /exit          Quit
 package main

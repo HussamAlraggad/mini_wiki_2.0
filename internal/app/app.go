@@ -1352,31 +1352,39 @@ func (a *Application) handleCommand(cmd string) (tea.Model, tea.Cmd) {
 	switch parts[0] {
 	case "/help":
 		help := `Available commands:
-  /help           Show this help message
-  /model <name>   Switch to a different model
-  /models         List available models
-  /refresh        Refresh model list from Ollama
-  /clear          Clear the conversation
-  /system <text>  Set a new system prompt
-  /scan           Scan workspace for files
-  /files          List scanned files
-  /ingest <path>  Read a file into context (auto-builds KB)
-  /fetch <url>    Fetch a webpage and extract text
-  /export         Export conversation data to .xlsx
-  /bookmark <t>   Save current finding as a bookmark
-  /bookmarks      List saved bookmarks
-  /history        Show recent query history
-  /skills         List tool capabilities
-  /flaws          Show known issues and solutions
-  /task <desc>    Add a task to the todo list
-  /tasks          List all tasks
-  /srs            Run full SRS generation pipeline (5 stages)
-  /exit           Quit the application
+  /help                Show this help message
+  /model <name>        Switch to a different model
+  /models              List available models
+  /refresh             Refresh model list from Ollama
+  /clear               Clear the conversation
+  /system <text>       Set a new system prompt
+  /scan                Scan workspace for files
+  /files               List scanned files
+  /ingest <path>       Read a file into context
+  /export [opts]       Export dataset to xlsx/csv/json
+  /rank <topic>        Rank dataset by relevance (Agentic AI)
+  /compare [<topic>]   Refine ranking with new topic
+  /discard <threshold> Remove rows below relevance score
+  /chart <type> <args> Visualize data (bar, trend, pie, etc.)
+  /embed               Embed dataset for RAG search (slow)
+  /infer <file>        Auto-detect file format
+  /wizard              Run system check and setup
+  /bookmark <title>    Save current finding
+  /bookmarks           List saved bookmarks
+  /history             Show recent query history
+  /skills              List tool capabilities
+  /flaws               Show known issues and solutions
+  /task <desc>         Add a todo task
+  /tasks               List all tasks
+  /panel               Toggle right info panel
+  /clip                Copy viewport to clipboard
+  /exit                Quit
 
-Memory & RAG:
-  Every message is auto-saved to the project KB (./.wiki/)
-  /ingest automatically builds the knowledge base
-  Chat searches past conversations for relevant context`
+Agentic Ranking:
+  /rank sends the dataset schema to qwen2.5-coder which writes
+  a Pandas filter script. The script runs locally in a sandboxed
+  environment (pandas/numpy/json only), scoring all rows at once.
+  No row-by-row LLM calls. 92K rows ranked in seconds.`
 		a.appendLine(helpStyle.Render(help))
 
 	case "/model":
@@ -1798,9 +1806,9 @@ const welcomeLogo = ` _       _       _       _       _
   _|  _|  _|  _|  _|  _|  _|  _|   
                                     
        mini-wiki v2.0
-  Your local AI research assistant
-                                    
-/srs  - Generate IEEE 830 SRS docs
+   Your local AI research assistant
+                                     
+/rank - Agentic ranking (fast)
 /scan - Index project files
 /help - All commands`
 
