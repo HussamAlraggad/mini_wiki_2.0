@@ -1351,41 +1351,18 @@ func (a *Application) handleCommand(cmd string) (tea.Model, tea.Cmd) {
 
 	switch parts[0] {
 	case "/help":
-		help := `Available commands:
-  /help                Show this help message
-  /model <name>        Switch to a different model
-  /models              List available models
-  /refresh             Refresh model list from Ollama
-  /clear               Clear the conversation
-  /system <text>       Set a new system prompt
-  /scan                Scan workspace for files
-  /files               List scanned files
-  /ingest <path>       Read a file into context
-  /export [opts]       Export dataset to xlsx/csv/json
-  /rank <topic>        Rank dataset by relevance (Agentic AI)
-  /compare [<topic>]   Refine ranking with new topic
-  /discard <threshold> Remove rows below relevance score
-  /chart <type> <args> Visualize data (bar, trend, pie, etc.)
-  /embed               Embed dataset for RAG search (slow)
-  /infer <file>        Auto-detect file format
-  /wizard              Run system check and setup
-  /bookmark <title>    Save current finding
-  /bookmarks           List saved bookmarks
-  /history             Show recent query history
-  /skills              List tool capabilities
-  /flaws               Show known issues and solutions
-  /task <desc>         Add a todo task
-  /tasks               List all tasks
-  /panel               Toggle right info panel
-  /clip                Copy viewport to clipboard
-  /exit                Quit
-
-Agentic Ranking:
-  /rank sends the dataset schema to qwen2.5-coder which writes
-  a Pandas filter script. The script runs locally in a sandboxed
-  environment (pandas/numpy/json only), scoring all rows at once.
-  No row-by-row LLM calls. 92K rows ranked in seconds.`
-		a.appendLine(helpStyle.Render(help))
+		// /help [command] — man-page style
+		subCmd := ""
+		if len(parts) > 1 && parts[1] != "" {
+			subCmd = strings.ToLower(strings.TrimPrefix(parts[1], "/"))
+		}
+		if subCmd == "" {
+			a.appendLine(helpStyle.Render(helpSummary()))
+		} else if man, ok := manPages[subCmd]; ok {
+			a.appendLine(helpStyle.Render(man))
+		} else {
+			a.errMsg = fmt.Sprintf("No help for '%s'. Try /help for commands.", parts[1])
+		}
 
 	case "/model":
 		if len(parts) < 2 {
@@ -2405,6 +2382,491 @@ func truncateText(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// --- Man-page help system ---
+
+// helpSummary returns a concise overview like 'command --help' in a terminal.
+func helpSummary() string {
+	return `NAME
+    mini-wiki - Standalone TUI Dataset RAG Analysis Tool
+
+USAGE
+    wiki [options]
+
+OPTIONS
+    --ollama <url>  Custom Ollama endpoint (default: http://127.0.0.1:11434)
+    --no-start      Fail if Ollama is not running (don't auto-start)
+    --select        Inline mode (allows native text selection with mouse)
+
+COMMANDS
+    /help [command]  Show this summary or a man page for a specific command
+
+  DATA
+    /ingest <path>   Read a file into context and register as active dataset
+    /export [opts]   Export dataset to xlsx/csv/json
+    /infer <file>    Auto-detect a file's format
+
+  RANKING
+    /rank <topic>        Rank dataset by relevance (Agentic AI, fast)
+    /compare [<topic>]   Compare rankings with a refined topic
+    /discard <threshold> Remove rows below a relevance score
+
+  VISUALIZATION
+    /chart <type> <args>  Generate charts (bar, trend, pie, scatter, etc.)
+
+  RAG
+    /embed              Embed active dataset for semantic search (slow)
+
+  SYSTEM
+    /model <name>   Switch the active LLM model
+    /models         List all available models
+    /refresh        Reload the model list from Ollama
+    /clear          Clear the conversation
+    /system <text>  Set a new system prompt
+    /wizard         Run an interactive system check / setup
+    /panel          Toggle the right info panel
+
+  UTILITY
+    /bookmark <title>  Save the current finding
+    /bookmarks         List all saved bookmarks
+    /history           Show recent query history
+    /skills            List all tool capabilities
+    /flaws             Show known issues and solutions
+    /task <desc>       Add a todo task
+    /tasks             List all tasks
+    /clip              Copy the viewport text to the system clipboard
+    /exit              Quit the application
+
+EXAMPLES
+    wiki
+    wiki --ollama http://192.168.1.100:11434
+    wiki --no-start --select
+
+SEE ALSO
+    /help rank     — Full documentation for the /rank command
+    /help chart    — Full documentation for the /chart command
+    /help ingest   — Full documentation for the /ingest command
+    /help export   — Full documentation for the /export command
+    /help embed    — Full documentation for the /embed command`
+}
+
+// manPages contains detailed man-page documentation for each command.
+var manPages = map[string]string{
+
+	"rank": `NAME
+    /rank — Rank dataset rows by relevance to a research topic
+
+SYNOPSIS
+    /rank <topic>
+
+DESCRIPTION
+    Uses Agentic RAG: instead of scoring every row via the LLM (slow),
+    the tool sends the dataset schema + 3 sample rows to the coder model
+    (qwen2.5-coder:7b). The LLM writes a Pandas filter_data(df) function.
+    The function executes locally in a sandboxed environment, scoring all
+    rows at once with vectorized operations.
+
+    No row-by-row LLM calls. 92,000 rows ranked in seconds.
+
+BEHAVIOR
+    1. The active dataset is loaded from the project KB
+    2. The Python RAG worker starts if not already running
+    3. Worker loads the data with Pandas (auto-detects CSV/JSONL/XLSX)
+    4. Worker extracts the schema (column names + types) + first 3 rows
+    5. Worker prompts qwen2.5-coder:7b for a Pandas filter script
+    6. The generated filter_data(df) function executes in a sandbox
+       (only pandas, numpy, json available — no os/sys/subprocess)
+    7. Worker returns filtered rows with a relevance_score column (1-100)
+    8. Go TUI displays a ranked table with scores
+
+DISPLAY
+    Rank | Score | Row | Column1   | Column2   | ...
+    1    | 0.95  | #42 | value     | value     | ...
+
+EXAMPLE
+    /rank studies about neural networks in medical imaging
+    /rank failed CI commits in the last quarter
+    /rank security vulnerabilities in authentication modules
+
+SEE ALSO
+    /compare, /discard, /export --ranked, /help ingest`,
+
+	"compare": `NAME
+    /compare — Re-rank with a refined topic and compare results
+
+SYNOPSIS
+    /compare
+    /compare <refined topic>
+
+DESCRIPTION
+    After an initial /rank, you can refine your research topic and
+    re-rank. The tool runs a new agentic ranking and displays a
+    side-by-side comparison with score deltas.
+
+BEHAVIOR
+    Without arguments: shows the current ranking again.
+    With a topic: runs agentic ranking with the new topic and displays:
+      Previous ranking          |  New ranking
+      1. neural imaging (0.95)  |  1. MRI preprocessing (0.97)
+      2. deep learning (0.88)   |  2. CNN architecture (0.92)
+                                  Delta: +0.05, -0.10
+
+EXAMPLE
+    /compare
+    /compare transformer models for code completion
+    /compare rust vs go security
+
+SEE ALSO
+    /rank, /discard`,
+
+	"discard": `NAME
+    /discard — Remove rows below a relevance threshold
+
+SYNOPSIS
+    /discard <threshold>
+    /discard --preview <threshold>
+    /discard --reset
+
+DESCRIPTION
+    After ranking, you can discard rows with a relevance_score below
+    a threshold (0.0 to 1.0). A preview shows how many rows will be
+    kept vs. discarded before asking for confirmation.
+
+    Discarded rows are NOT deleted from the original file. They are
+    only removed from the active working set in memory. Use --reset
+    to restore all previously discarded rows.
+
+BEHAVIOR
+    /discard 0.3       — Preview + confirm discarding rows below 0.3
+    /discard --preview — Show preview without asking confirmation
+    /discard --reset   — Restore all previously discarded rows
+
+EXAMPLE
+    /discard 0.5
+    /discard --preview 0.3
+    /discard --reset
+
+SEE ALSO
+    /rank, /compare, /export --ranked`,
+
+	"chart": `NAME
+    /chart — Generate charts from the active dataset
+
+SYNOPSIS
+    /chart bar column=<col>
+    /chart trend column=<col>
+    /chart pie column=<col>
+    /chart scatter x=<col> y=<col>
+    /chart histogram column=<col> buckets=<n>
+    /chart box column=<col>
+    /chart heatmap x=<col> y=<col>
+
+DESCRIPTION
+    Renders a chart in the terminal (ASCII) and optionally exports
+    a PNG/SVG file. Charts use the active (post-rank) dataset.
+
+    When --export is added, saves as PNG/SVG to the current directory.
+
+EXAMPLE
+    /chart bar column=status
+    /chart trend column=score
+    /chart pie column=category
+    /chart scatter x=age y=salary
+    /chart histogram column=relevance buckets=10
+    /chart trend column=relevance --export`,
+
+	"ingest": `NAME
+    /ingest — Read a file into context and register as the active dataset
+
+SYNOPSIS
+    /ingest @<file>
+
+DESCRIPTION
+    Parses the file, counts rows, and registers it as the active dataset
+    for /rank, /chart, /export, and /embed commands. The file is NOT
+    embedded for RAG search until /embed is called.
+
+    Supports: CSV, TSV, JSONL, JSON, XLSX, ODS, and plain text.
+    Format is auto-detected by file extension.
+
+EXAMPLE
+    /ingest @data.csv
+    /ingest @datasets/SWE_Next_dataset.jsonl
+    /ingest @../research/data.xlsx
+
+SEE ALSO
+    /rank, /chart, /export, /embed, /infer`,
+
+	"export": `NAME
+    /export — Export the active dataset to a file
+
+SYNOPSIS
+    /export [--format xlsx|csv|json] [--output <path>] [--ranked]
+
+DESCRIPTION
+    Exports the active (post-rank, post-discard) dataset to a file.
+    Default format is xlsx (Excel). Column types are auto-detected
+    and formatted correctly.
+
+    Use --ranked to include the relevance_score column and sort by
+    score descending. Requires a prior /rank.
+
+EXAMPLE
+    /export
+    /export --format csv
+    /export --format json
+    /export --ranked
+    /export --ranked --format csv --output ~/results.csv
+
+SEE ALSO
+    /rank, /ingest`,
+
+	"embed": `NAME
+    /embed — Embed the active dataset for RAG semantic search
+
+SYNOPSIS
+    /embed
+
+DESCRIPTION
+    Sends the dataset to the Python RAG worker for vector embedding.
+    Once embedded, you can ask free-form questions about the data and
+    the tool will retrieve relevant chunks via ChromaDB.
+
+    For large datasets (1GB+), embedding can take hours. The progress
+    is displayed in real-time. Press Escape to cancel at any time.
+
+    NOTE: /embed is OPTIONAL. /rank, /chart, and /export do NOT
+    require embedding — they work immediately after /ingest.
+
+EXAMPLE
+    /embed
+
+SEE ALSO
+    /ingest, /kbstatus, /kbquery`,
+
+	"model": `NAME
+    /model — Switch the active LLM model
+
+SYNOPSIS
+    /model <name>
+
+DESCRIPTION
+    Switches the active model used for chat and ranking code generation.
+    The model name is matched case-insensitively (partial match).
+
+    Models recommended:
+      deepseek-r1:8b    — Research reasoning, deep dataset synthesis
+      qwen2.5-coder:7b  — Code generation for Agentic Ranking
+      llama3.1:8b       — Stable general-purpose chat
+      gemma4:e4b        — Logic-heavy tasks
+
+EXAMPLE
+    /model deepseek-r1:8b
+    /model qwen2.5-coder:7b
+
+SEE ALSO
+    /models, /refresh, /help wizard`,
+
+	"wizard": `NAME
+    /wizard — Run system check and interactive setup
+
+SYNOPSIS
+    /wizard
+
+DESCRIPTION
+    Checks the system for: Python version, Ollama availability,
+    installed models, pip dependencies. Helps you set up the
+    environment if anything is missing.
+
+EXAMPLE
+    /wizard`,
+
+	"panel": `NAME
+    /panel — Toggle the right info panel
+
+SYNOPSIS
+    /panel
+
+DESCRIPTION
+    Hides or shows the right info panel (SESSION, TASKS, HX).
+    When hidden, the chat panel uses the full terminal width.
+
+EXAMPLE
+    /panel`,
+
+	"clip": `NAME
+    /clip — Copy the chat viewport text to the system clipboard
+
+SYNOPSIS
+    /clip
+
+DESCRIPTION
+    Copies the entire viewport content to the system clipboard.
+    You can also click-and-drag with the mouse to select specific
+    lines — on release, the selected text is copied automatically.
+
+EXAMPLE
+    /clip`,
+
+	"clear": `NAME
+    /clear — Clear the conversation history
+
+SYNOPSIS
+    /clear
+
+DESCRIPTION
+    Removes all messages from the current conversation while keeping
+    the system prompt. The conversation thread is preserved but empty.
+
+EXAMPLE
+    /clear`,
+
+	"system": `NAME
+    /system — Set a custom system prompt for the LLM
+
+SYNOPSIS
+    /system <text>
+
+DESCRIPTION
+    Replaces the current system prompt with the provided text.
+    The system prompt sets the behavior and personality of the LLM.
+
+EXAMPLE
+    /system You are a data science researcher analyzing software repositories.
+    /system You are a helpful assistant that speaks like a pirate.`,
+
+	"infer": `NAME
+    /infer — Auto-detect a file's format
+
+SYNOPSIS
+    /infer @<file>
+
+DESCRIPTION
+    Reads the file header and determines the format (CSV, JSONL,
+    JSON, XLSX, etc.) without ingesting the data. Useful for
+    checking if a file is compatible before running /ingest.
+
+EXAMPLE
+    /infer @unknown_data_file`,
+
+	"bookmark": `NAME
+    /bookmark — Save the current finding as a bookmark
+
+SYNOPSIS
+    /bookmark <title>
+
+DESCRIPTION
+    Saves a bookmark with the given title. Bookmarks persist
+    across sessions in the project KB (.wiki/kb.sqlite).
+
+EXAMPLE
+    /bookmark Important finding about neural networks
+    /bookmark Key insight from data analysis`,
+
+	"bookmarks": `NAME
+    /bookmarks — List all saved bookmarks
+
+SYNOPSIS
+    /bookmarks
+
+DESCRIPTION
+    Displays all bookmarks saved via /bookmark, showing title
+    and timestamp for each.
+
+EXAMPLE
+    /bookmarks`,
+
+	"history": `NAME
+    /history — Show recent query history
+
+SYNOPSIS
+    /history
+
+DESCRIPTION
+    Displays the most recent queries from the current project,
+    including timestamps and the model used.
+
+EXAMPLE
+    /history`,
+
+	"skills": `NAME
+    /skills — List all tool capabilities
+
+SYNOPSIS
+    /skills
+
+DESCRIPTION
+    Lists all registered tool capabilities and which models
+    support them.
+
+EXAMPLE
+    /skills`,
+
+	"flaws": `NAME
+    /flaws — Show known issues and solutions
+
+SYNOPSIS
+    /flaws
+
+DESCRIPTION
+    Displays known issues, bugs, and their workarounds from
+    the tool memory. Add entries via the memory system.
+
+EXAMPLE
+    /flaws`,
+
+	"task": `NAME
+    /task — Add a todo task
+
+SYNOPSIS
+    /task <description>
+
+DESCRIPTION
+    Adds a task to the in-session todo list. Tasks are displayed
+    in the right info panel under TASKS.
+
+EXAMPLE
+    /task Review the ranked dataset for accuracy
+    /task Run /compare with a different topic`,
+
+	"tasks": `NAME
+    /tasks — List all todo tasks
+
+SYNOPSIS
+    /tasks
+
+DESCRIPTION
+    Lists all tasks added via /task, showing completion status.
+
+EXAMPLE
+    /tasks`,
+
+	"models": `NAME
+    /models — List all available Ollama models
+
+SYNOPSIS
+    /models
+
+DESCRIPTION
+    Queries Ollama for all available models and displays them
+    with sizes. The active model is marked.
+
+EXAMPLE
+    /models`,
+
+	"refresh": `NAME
+    /refresh — Reload the model list from Ollama
+
+SYNOPSIS
+    /refresh
+
+DESCRIPTION
+    Re-queries Ollama for the available model list. Useful after
+    pulling or removing models while the tool is running.
+
+EXAMPLE
+    /refresh`,
 }
 
 // --- Command auto-completion ---
