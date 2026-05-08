@@ -38,6 +38,7 @@ from rag_worker.embedder import Embedder
 from rag_worker.vectordb import VectorDB
 from rag_worker.ingester import ingest_file, IngestionResult
 from rag_worker.querier import query, QueryResult
+from rag_worker.agentic_ranker import agentic_rank
 
 logging.basicConfig(
     level=logging.WARNING,
@@ -156,6 +157,19 @@ def main():
                     "embed_model": embedder.model,
                     "rag_dir": rag_dir,
                 })
+
+            elif cmd_type == "rank":
+                path = cmd.get("path", "")
+                topic = cmd.get("topic", "")
+                current_llm = cmd.get("llm_model", "qwen2.5-coder:7b")
+
+                if not path or not topic:
+                    send_response({"type": "error", "message": "Missing path or topic"})
+                    continue
+
+                # Run the agentic ranker (LLM writes Pandas code, executes locally)
+                result = agentic_rank(path, topic, current_llm, ollama_url)
+                send_response(result)
 
             elif cmd_type == "ping":
                 send_response({"type": "pong"})

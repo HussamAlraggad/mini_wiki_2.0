@@ -19,6 +19,7 @@ type Request struct {
 	Cmd        string `json:"cmd"`
 	Path       string `json:"path,omitempty"`
 	Text       string `json:"text,omitempty"`
+	Topic      string `json:"topic,omitempty"`
 	TopK       int    `json:"top_k,omitempty"`
 	EmbedModel string `json:"embed_model,omitempty"`
 	LLMModel   string `json:"llm_model,omitempty"`
@@ -26,19 +27,22 @@ type Request struct {
 
 // Response types received from the Python worker via stdout.
 type Response struct {
-	Type        string            `json:"type"`
-	Message     string            `json:"message,omitempty"`
-	Path        string            `json:"path,omitempty"`
-	Chunks      int               `json:"chunks,omitempty"`
-	TotalChunks int               `json:"total_chunks,omitempty"`
-	Answer      string            `json:"answer,omitempty"`
-	Sources     []Source          `json:"sources,omitempty"`
-	Model       string            `json:"model,omitempty"`
-	EmbedModel  string            `json:"embed_model,omitempty"`
-	RagDir      string            `json:"rag_dir,omitempty"`
-	LLMModel    string            `json:"llm_model,omitempty"`
-	Error       string            `json:"error,omitempty"`
-	Traceback   string            `json:"traceback,omitempty"`
+	Type        string                   `json:"type"`
+	Message     string                   `json:"message,omitempty"`
+	Path        string                   `json:"path,omitempty"`
+	Chunks      int                      `json:"chunks,omitempty"`
+	TotalChunks int                      `json:"total_chunks,omitempty"`
+	Answer      string                   `json:"answer,omitempty"`
+	Sources     []Source                 `json:"sources,omitempty"`
+	Model       string                   `json:"model,omitempty"`
+	EmbedModel  string                   `json:"embed_model,omitempty"`
+	RagDir      string                   `json:"rag_dir,omitempty"`
+	LLMModel    string                   `json:"llm_model,omitempty"`
+	RowsKept    int                      `json:"rows_kept,omitempty"`
+	TotalRows   int                      `json:"total_rows,omitempty"`
+	Data        []map[string]interface{} `json:"data,omitempty"`
+	Error       string                   `json:"error,omitempty"`
+	Traceback   string                   `json:"traceback,omitempty"`
 }
 
 // Source represents a retrieved chunk with metadata.
@@ -338,6 +342,33 @@ func (c *Client) Query(text string, topK int) (*QueryResult, error) {
 		Sources: resp.Sources,
 		Model:   resp.Model,
 	}, nil
+}
+
+// Rank sends a ranking command to the Python worker and returns the raw response.
+// The worker uses agentic ranking (LLM writes Pandas code, executes locally).
+// path: dataset file path, topic: research topic, llmModel: code generation model.
+func (c *Client) Rank(path, topic, llmModel string) (*Response, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	req := Request{
+		Cmd:      "rank",
+		Path:     path,
+		Topic:    topic,
+		LLMModel: llmModel,
+	}
+	if err := c.sendRequest(req); err != nil {
+		return nil, err
+	}
+
+	resp, err := c.readResponse()
+	if err != nil {
+		if c.lastError != "" {
+			return nil, fmt.Errorf("worker error: %s", c.lastError)
+		}
+		return nil, err
+	}
+	return resp, nil
 }
 
 // Status retrieves the current index statistics from the worker.

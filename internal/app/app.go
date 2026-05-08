@@ -2714,19 +2714,24 @@ func (a *srsLLMAdapter) Generate(ctx context.Context, model, prompt string) (str
 
 func rankCmd(a *Application, topic string) tea.Cmd {
 	return func() tea.Msg {
-		// Load the dataset from the project KB
-		// This is a placeholder -- Phase 4 needs LoadDataset to actually work
 		projectDir := a.pkb.ProjectDir()
 
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-		defer cancel()
-
-		ranker := ranking.NewRanker(&srsLLMAdapter{client: a.client}, ranking.DefaultConfig())
+		// Load dataset metadata from project KB
 		data, err := ranking.LoadDataset(projectDir)
 		if err != nil {
 			return RankFailed{Err: err}
 		}
 
+		// Ensure the RAG worker is running for agentic ranking
+		if errMsg := a.ensureRAGStarted(); errMsg != "" {
+			return RankFailed{Err: fmt.Errorf("RAG worker unavailable: %s. Try /embed first.", errMsg)}
+		}
+
+		// Use a 5-minute timeout for agentic ranking (LLM codegen + Pandas execution)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+
+		ranker := ranking.NewRanker(a.ragClient, ranking.DefaultConfig())
 		result, err := ranker.ScoreAll(ctx, data, topic)
 		if err != nil {
 			return RankFailed{Err: err}
@@ -2743,10 +2748,15 @@ func compareCmd(a *Application, newTopic string) tea.Cmd {
 			return RankFailed{Err: fmt.Errorf("no previous ranking")}
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		// Ensure RAG worker is running
+		if errMsg := a.ensureRAGStarted(); errMsg != "" {
+			return RankFailed{Err: fmt.Errorf("RAG worker unavailable: %s. Try /embed first.", errMsg)}
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
 
-		ranker := ranking.NewRanker(&srsLLMAdapter{client: a.client}, ranking.DefaultConfig())
+		ranker := ranking.NewRanker(a.ragClient, ranking.DefaultConfig())
 		newResult, err := ranker.Rerank(ctx, a.currentRank, newTopic)
 		if err != nil {
 			return RankFailed{Err: err}

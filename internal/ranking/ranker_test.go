@@ -2,68 +2,47 @@ package ranking
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"mini-wiki/internal/dataset"
+	"mini-wiki/internal/rag"
 )
 
-// mockLLM implements LLMClient for testing.
-type mockLLM struct {
-	responses map[string]string
+// mockRagClient implements RagClient for testing.
+type mockRagClient struct {
+	response *rag.Response
+	err      error
 }
 
-func (m *mockLLM) Generate(ctx context.Context, model, prompt string) (string, error) {
-	if m.responses != nil {
-		for key, resp := range m.responses {
-			if strings.Contains(prompt, key) {
-				return resp, nil
-			}
-		}
+func (m *mockRagClient) Rank(path, topic, llmModel string) (*rag.Response, error) {
+	if m.err != nil {
+		return nil, m.err
 	}
-	return "0.5", nil
-}
-
-func TestParseScore(t *testing.T) {
-	tests := []struct {
-		input string
-		want  float64
-	}{
-		{"0.85", 0.85},
-		{"0.5", 0.5},
-		{"1.0", 1.0},
-		{"0.0", 0.0},
-		{" 0.75 ", 0.75},
-		{"The score is 0.9", 0.9},
-		{"-0.1", 0.0},   // clamped
-		{"1.5", 1.0},    // clamped
-		{"abc", 0.0},    // non-numeric
-		{"", 0.0},       // empty
-	}
-	for _, tt := range tests {
-		if got := parseScore(tt.input); got != tt.want {
-			t.Errorf("parseScore(%q) = %f, want %f", tt.input, got, tt.want)
-		}
-	}
+	return m.response, nil
 }
 
 func TestScoreAll_Basic(t *testing.T) {
-	mock := &mockLLM{responses: map[string]string{
-		"Row #0": "0.9",
-		"Row #1": "0.3",
-	}}
+	mock := &mockRagClient{
+		response: &rag.Response{
+			Type:     "rank_done",
+			RowsKept: 1,
+			Data: []map[string]interface{}{
+				{"text": "highly relevant", "relevance_score": float64(95)},
+			},
+			Message: "Ranked: 2 rows -> 1 kept",
+		},
+	}
 	r := NewRanker(mock, DefaultConfig())
 
 	data := &dataset.Dataset{
-		Name: "test",
+		Name:       "test",
+		SourceFile: "/tmp/test.csv",
 		Columns: []dataset.Column{
 			{Name: "text", Kind: dataset.ColumnString},
-		},
-		Rows: []dataset.Row{
-			{Index: 0, Data: map[string]interface{}{"text": "highly relevant"}},
-			{Index: 1, Data: map[string]interface{}{"text": "not relevant"}},
 		},
 		RowCount: 2,
 	}
@@ -77,18 +56,17 @@ func TestScoreAll_Basic(t *testing.T) {
 		t.Fatal("expected non-nil result")
 	}
 
-	if len(result.Scores) != 2 {
-		t.Errorf("expected 2 scores, got %d", len(result.Scores))
+	if len(result.Scores) != 1 {
+		t.Errorf("expected 1 score, got %d", len(result.Scores))
 	}
 
-	// First row should be sorted highest first
 	if result.Dataset.Rows[0].Data["text"] != "highly relevant" {
-		t.Errorf("expected highly relevant first, got %v", result.Dataset.Rows[0].Data["text"])
+		t.Errorf("expected 'highly relevant', got %v", result.Dataset.Rows[0].Data["text"])
 	}
 }
 
 func TestScoreAll_EmptyData(t *testing.T) {
-	mock := &mockLLM{}
+	mock := &mockRagClient{}
 	r := NewRanker(mock, DefaultConfig())
 	_, err := r.ScoreAll(context.Background(), nil, "topic")
 	if err == nil {
@@ -97,22 +75,21 @@ func TestScoreAll_EmptyData(t *testing.T) {
 }
 
 func TestScoreAll_ContextCancellation(t *testing.T) {
-	mock := &mockLLM{}
+	// With the agentic approach, context cancellation happens in the Go code,
+	// not during row-by-row scoring. This test verifies basic error handling.
+	mock := &mockRagClient{
+		err: fmt.Errorf("RAG worker unavailable"),
+	}
 	r := NewRanker(mock, DefaultConfig())
 
 	data := &dataset.Dataset{
-		Rows: []dataset.Row{
-			{Index: 0, Data: map[string]interface{}{"text": "test"}},
-		},
-		RowCount: 1,
+		SourceFile: "/tmp/test.csv",
+		RowCount:   1,
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	_, err := r.ScoreAll(ctx, data, "topic")
+	_, err := r.ScoreAll(context.Background(), data, "topic")
 	if err == nil {
-		t.Error("expected error from cancelled context")
+		t.Error("expected error from mock")
 	}
 }
 
@@ -257,16 +234,13 @@ func TestDetectColumnTypes(t *testing.T) {
 
 func TestDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig()
-	if cfg.Model != "llama3.1:8b" {
-		t.Errorf("expected default model llama3.1:8b, got %s", cfg.Model)
-	}
-	if cfg.MaxRows != 10000 {
-		t.Errorf("expected MaxRows=10000, got %d", cfg.MaxRows)
+	if cfg.Model != "qwen2.5-coder:7b" {
+		t.Errorf("expected default model qwen2.5-coder:7b, got %s", cfg.Model)
 	}
 }
 
 func TestNewRanker(t *testing.T) {
-	mock := &mockLLM{}
+	mock := &mockRagClient{}
 	r := NewRanker(mock, DefaultConfig())
 	if r == nil {
 		t.Fatal("expected non-nil ranker")

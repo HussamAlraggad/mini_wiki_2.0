@@ -106,13 +106,15 @@ else
     echo "  Ollama started."
 fi
 
-# --- Pull embedding models ---
+# --- Pull models ---
 echo ""
-echo "[5/5] Pulling embedding models..."
-echo "  Pulling nomic-embed-text..."
+echo "[5/5] Pulling models..."
+echo "  Pulling nomic-embed-text (RAG embeddings)..."
 ollama pull nomic-embed-text 2>&1 | tail -2
-echo "  Pulling all-minilm..."
-ollama pull all-minilm 2>&1 | tail -2
+echo "  Pulling deepseek-r1:8b (research reasoning)..."
+ollama pull deepseek-r1:8b 2>&1 | tail -2
+echo "  Pulling qwen2.5-coder:7b (code generation for agentic ranking)..."
+ollama pull qwen2.5-coder:7b 2>&1 | tail -2
 echo ""
 echo "=== Setup Complete ==="
 echo ""

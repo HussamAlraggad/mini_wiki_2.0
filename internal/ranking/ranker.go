@@ -1,6 +1,6 @@
 // Package ranking implements relevance scoring of dataset rows against a user-provided
-// research topic. It uses the local LLM to score each row's relevance and supports
-// iterative comparison and threshold-based discarding.
+// research topic. It uses Agentic RAG: sends the schema to a coder LLM, which writes
+// a Pandas filter script. The script is executed locally for O(1) LLM cost.
 package ranking
 
 import (
@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"mini-wiki/internal/dataset"
+	"mini-wiki/internal/rag"
 
 	_ "modernc.org/sqlite"
 )
@@ -40,70 +41,42 @@ type RankResult struct {
 	DiscardCount int // number of rows discarded (if /discard was run)
 }
 
+// RagClient is the interface the ranker uses to communicate with the RAG worker.
+type RagClient interface {
+	Rank(path, topic, llmModel string) (*rag.Response, error)
+}
+
 // Ranker performs relevance scoring against a topic.
 type Ranker interface {
 	// ScoreAll scores every row in the dataset against the topic.
-	// It calls the LLM once per row (or in batches) and returns scores.
+	// Uses Agentic RAG: sends schema to coder LLM, executes Pandas script locally.
 	ScoreAll(ctx context.Context, data *dataset.Dataset, topic string) (*RankResult, error)
 
 	// Rerank scores against a refined topic, preserving the original scores for comparison.
 	Rerank(ctx context.Context, original *RankResult, newTopic string) (*RankResult, error)
 }
 
-// LLMClient is the interface for calling the local LLM.
-type LLMClient interface {
-	// Generate sends a prompt to the LLM and returns the response text.
-	Generate(ctx context.Context, model, prompt string) (string, error)
-}
-
 // Config controls ranking behavior.
 type Config struct {
-	Model          string  // LLM model to use
-	MaxRows        int     // max rows to score (default 10000)
-	TruncateMsg    string  // warning when truncated
+	Model       string // LLM model for code generation (default: qwen2.5-coder:7b)
+	CodeGenOnly bool   // if true, skip dataset loading and just return generated code
 }
 
 // DefaultConfig returns sensible defaults for ranking.
 func DefaultConfig() Config {
 	return Config{
-		Model:   "llama3.1:8b",
-		MaxRows: 10000,
+		Model: "qwen2.5-coder:7b",
 	}
 }
 
-// NewRanker creates a new Ranker.
-func NewRanker(client LLMClient, cfg Config) Ranker {
-	return &ranker{client: client, cfg: cfg}
+// NewRanker creates a new Ranker that uses the RAG worker for agentic ranking.
+func NewRanker(ragClient RagClient, cfg Config) Ranker {
+	return &ranker{ragClient: ragClient, cfg: cfg}
 }
 
 type ranker struct {
-	client LLMClient
-	cfg    Config
-}
-
-// scorePrompt generates the LLM prompt for scoring a single row.
-func scorePrompt(topic string, row dataset.Row, columns []dataset.Column) string {
-	var rowStr strings.Builder
-	rowStr.WriteString(fmt.Sprintf("Row #%d:\n", row.Index))
-	for _, col := range columns {
-		val := fmt.Sprintf("%v", row.Data[col.Name])
-		if len(val) > 200 {
-			val = val[:197] + "..."
-		}
-		rowStr.WriteString(fmt.Sprintf("  %s: %s\n", col.Name, val))
-	}
-
-	return fmt.Sprintf(`You are scoring dataset rows for relevance to a research topic.
-
-Research topic: "%s"
-
-Rate how relevant this specific row is to the research topic on a scale of 0.0 to 1.0.
-- 0.0 = completely irrelevant
-- 0.5 = somewhat relevant
-- 1.0 = highly relevant
-
-%s
-Respond with ONLY a single number between 0.0 and 1.0. Do not include any other text.`, topic, rowStr.String())
+	ragClient RagClient
+	cfg       Config
 }
 
 func (r *ranker) ScoreAll(ctx context.Context, data *dataset.Dataset, topic string) (*RankResult, error) {
@@ -111,38 +84,33 @@ func (r *ranker) ScoreAll(ctx context.Context, data *dataset.Dataset, topic stri
 		return nil, fmt.Errorf("no data to rank")
 	}
 
-	rows := data.Rows
-	if len(rows) > r.cfg.MaxRows {
-		rows = rows[:r.cfg.MaxRows]
+	if r.ragClient == nil {
+		return nil, fmt.Errorf("RAG worker not available for agentic ranking")
 	}
 
-	scores := make([]float64, len(rows))
 	model := r.cfg.Model
 	if model == "" {
-		model = "llama3.1:8b"
+		model = "qwen2.5-coder:7b"
 	}
 
-	for i, row := range rows {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		default:
-		}
-
-		prompt := scorePrompt(topic, row, data.Columns)
-		resp, err := r.client.Generate(ctx, model, prompt)
-		if err != nil {
-			// On error, default to 0.0 and continue
-			scores[i] = 0.0
-			continue
-		}
-
-		score := parseScore(resp)
-		scores[i] = score
+	// Use the Agentic RAG approach: send the dataset path to the Python worker.
+	// The worker loads the data, extracts schema, prompts the coder LLM for a
+	// Pandas filter script, executes it locally, and returns filtered results.
+	rankResp, err := r.ragClient.Rank(data.SourceFile, topic, model)
+	if err != nil {
+		return nil, fmt.Errorf("agentic rank failed: %w", err)
 	}
 
-	// Build RankResult with sorted data
-	result := buildRankResult(data, topic, scores, rows)
+	if rankResp.Type == "error" {
+		errMsg := rankResp.Error
+		if errMsg == "" {
+			errMsg = rankResp.Message
+		}
+		return nil, fmt.Errorf("agentic rank error: %s", errMsg)
+	}
+
+	// Convert the Python worker's response into a RankResult
+	result := buildRankResultFromAgentic(data, topic, rankResp)
 
 	return result, nil
 }
@@ -151,78 +119,89 @@ func (r *ranker) Rerank(ctx context.Context, original *RankResult, newTopic stri
 	return r.ScoreAll(ctx, original.Dataset, newTopic)
 }
 
-// parseScore extracts a float from the LLM's response.
-func parseScore(resp string) float64 {
-	resp = strings.TrimSpace(resp)
-	// Try to find a float in the response
-	var score float64
-	if _, err := fmt.Sscanf(resp, "%f", &score); err != nil {
-		// Try to find number in string like "0.85"
-		for _, part := range strings.Fields(resp) {
-			if _, err := fmt.Sscanf(part, "%f", &score); err == nil {
-				break
-			}
-		}
-	}
-
-	// Clamp to [0, 1]
-	if score < 0 {
-		score = 0
-	}
-	if score > 1 {
-		score = 1
-	}
-	return score
-}
-
-// buildRankResult creates a RankResult sorted by score descending.
-func buildRankResult(data *dataset.Dataset, topic string, scores []float64, rows []dataset.Row) *RankResult {
-	// Create a copy of the dataset with relevance_score column
+// buildRankResultFromAgentic converts the Python worker's response into a RankResult.
+// The worker returns filtered data with relevance_score already computed by the
+// generated Pandas script.
+func buildRankResultFromAgentic(originalDS *dataset.Dataset, topic string, resp *rag.Response) *RankResult {
+	// Create a new dataset from the filtered results
 	resultDS := &dataset.Dataset{
-		Name:       data.Name,
-		SourceFile: data.SourceFile,
-		Columns:    append([]dataset.Column(nil), data.Columns...),
-		ColumnCount: data.ColumnCount + 1,
-		IngestedAt: time.Now(),
+		Name:        originalDS.Name,
+		SourceFile:  originalDS.SourceFile,
+		Columns:     append([]dataset.Column(nil), originalDS.Columns...),
+		ColumnCount: originalDS.ColumnCount + 1,
+		IngestedAt:  time.Now(),
 	}
 
-	// Add relevance_score column
-	resultDS.Columns = append(resultDS.Columns, dataset.Column{
-		Name: "relevance_score",
-		Kind: dataset.ColumnFloat,
-	})
-
-	// Sort indices by score descending
-	type scoredRow struct {
-		index int
-		row   dataset.Row
-		score float64
-	}
-	scored := make([]scoredRow, len(rows))
-	for i, row := range rows {
-		row.Data["relevance_score"] = scores[i]
-		scored[i] = scoredRow{index: i, row: row, score: scores[i]}
-	}
-	sort.Slice(scored, func(i, j int) bool {
-		return scored[i].score > scored[j].score
-	})
-
-	// Build sorted rows and compute stats
-	resultDS.Rows = make([]dataset.Row, len(scored))
-	var sum, min, max float64
-	min = math.MaxFloat64
-	for i, sr := range scored {
-		resultDS.Rows[i] = sr.row
-		sum += sr.score
-		if sr.score < min {
-			min = sr.score
+	// Add relevance_score column (may already be in data, but ensure it's tracked)
+	hasScoreCol := false
+	for _, c := range resultDS.Columns {
+		if c.Name == "relevance_score" {
+			hasScoreCol = true
+			break
 		}
-		if sr.score > max {
-			max = sr.score
+	}
+	if !hasScoreCol {
+		resultDS.Columns = append(resultDS.Columns, dataset.Column{
+			Name: "relevance_score",
+			Kind: dataset.ColumnFloat,
+		})
+		resultDS.ColumnCount++
+	}
+
+	// Build rows from the returned data
+	scores := make([]float64, len(resp.Data))
+	for i, item := range resp.Data {
+		row := dataset.Row{
+			Index: i,
+			Data:  make(map[string]interface{}),
 		}
+		for k, v := range item {
+			row.Data[k] = v
+		}
+		// Extract relevance_score
+		if s, ok := item["relevance_score"].(float64); ok {
+			scores[i] = s
+		} else if s, ok := item["relevance_score"].(int); ok {
+			scores[i] = float64(s)
+		} else if s, ok := item["relevance_score"].(int64); ok {
+			scores[i] = float64(s)
+		} else if s, ok := item["relevance_score"].(int32); ok {
+			scores[i] = float64(s)
+		}
+		resultDS.Rows = append(resultDS.Rows, row)
 	}
 	resultDS.RowCount = len(resultDS.Rows)
 
+	// Sort by relevance_score descending
+	sort.Slice(resultDS.Rows, func(i, j int) bool {
+		si := 0.0
+		sj := 0.0
+		if s, ok := resultDS.Rows[i].Data["relevance_score"].(float64); ok {
+			si = s
+		}
+		if s, ok := resultDS.Rows[j].Data["relevance_score"].(float64); ok {
+			sj = s
+		}
+		return si > sj
+	})
+
+	// Re-sort scores to match sorted rows
+	sort.Slice(scores, func(i, j int) bool {
+		return scores[i] > scores[j]
+	})
+
+	// Compute stats
+	var sum, min, max float64
+	min = math.MaxFloat64
+	for _, s := range scores {
+		sum += s
+		if s < min {
+			min = s
+		}
+		if s > max {
+			max = s
+		}
+	}
 	n := float64(len(scores))
 	mean := 0.0
 	if n > 0 {
