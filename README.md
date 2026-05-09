@@ -2,8 +2,8 @@
 
 A terminal-based AI research assistant for dataset analysis — fully local, no cloud APIs.
 
-Ingest CSV, JSONL, XLSX, or TXT files → rank rows by relevance to a research topic →
-visualize with ASCII charts → export to Excel/CSV/JSON. Everything runs offline on your GPU.
+**Ingest** CSV / JSONL / XLSX / TSV → **Rank** by relevance via Agentic AI (seconds, not hours) →
+**Visualize** with ASCII charts → **Export** to Excel/CSV/JSON. Everything runs offline on your GPU.
 
 ---
 
@@ -15,7 +15,7 @@ bash setup.sh
 go build -o wiki .
 cp wiki ~/.local/bin/wiki
 
-# Run
+# Run from any dataset directory
 cd ~/my_dataset_folder
 wiki
 ```
@@ -37,14 +37,16 @@ cp wiki ~/.local/bin/wiki              # optional: global install
 ### Manual
 
 ```bash
-# Python deps (required for RAG)
-pip install chromadb ollama unstructured pypdf
+# Python deps (install inside .venv/ or use system pip)
+pip install chromadb ollama unstructured pypdf pandas
 
-# Recommended models
-ollama pull nomic-embed-text            # embeddings (required for /embed)
-ollama pull llama3.1:8b                 # chat + ranking (default)
-ollama pull deepseek-coder              # best for analysis
-ollama pull deepseek-r1:8b              # deep reasoning
+# Required models
+ollama pull nomic-embed-text           # RAG embeddings (needed for /embed)
+ollama pull llama3.1:8b                # General chat (default)
+
+# Recommended for Agentic Ranking
+ollama pull qwen2.5-coder:7b           # Code generation for /rank (fast)
+ollama pull deepseek-r1:8b             # Deep reasoning
 
 # Build
 go build -o wiki .
@@ -65,12 +67,38 @@ cp wiki ~/.local/bin/wiki
 ## Workflow
 
 ```
-1. /ingest @dataset.csv     # Parse file (3 seconds) — ready for /rank
-2. /rank "research topic"   # Score every row (GPU, stream progress)
+1. /ingest @dataset.csv     # Parse file (< 1 second) — ready for /rank
+2. /rank "research topic"   # Agentic AI ranking (seconds, not hours)
 3. /chart bar column=score  # Visualize results
-4. /export --ranked          # Export to Excel with scores
+4. /export --ranked          # Export to Excel with relevance scores
 5. /embed                    # (Optional) Index for RAG chat
 6. Type questions            # Auto-RAG if embedded
+```
+
+---
+
+## How Agentic Ranking Works
+
+Traditional RAG scores every row individually via the LLM — **92,000 LLM calls** for a 92K-row dataset (hours).
+
+**mini-wiki uses Agentic RAG**:
+
+1. Loads the dataset schema (column names + types) + 3 sample rows
+2. Sends schema + your research topic to `qwen2.5-coder:7b`
+3. The LLM writes a **Pandas `filter_data(df)`** function
+4. The function runs **locally in a sandbox** (pandas/numpy/json only — no `os`/`sys`/`subprocess`)
+5. Returns filtered rows with `relevance_score` (1-100)
+
+**Result: 1 LLM call instead of 92,000. 92K rows ranked in seconds.**
+
+```json
+{"cmd": "rank", "path": "dataset.csv", "topic": "research topic"}
+       │
+       ▼
+Python worker: load CSV → extract schema → prompt qwen2.5-coder → execute Pandas → return JSON
+       │
+       ▼
+Go TUI: display ranked table
 ```
 
 ---
@@ -79,29 +107,34 @@ cp wiki ~/.local/bin/wiki
 
 ### Recommended models
 
-| Model | Size | When to use | Command |
+| Model | Size | Purpose | Command |
 |---|---|---|---|
-| **llama3.1:8b** | 4.9 GB | Default — good all-rounder | `/model llama3.1:8b` |
-| **deepseek-coder** | 776 MB | Best for analysis & ranking | `/model deepseek-coder` |
+| **llama3.1:8b** | 4.9 GB | Default chat model | `/model llama3.1:8b` |
+| **qwen2.5-coder:7b** | 4.7 GB | Code generation for Agentic Ranking | `/model qwen2.5-coder:7b` |
 | **deepseek-r1:8b** | 5.2 GB | Deep reasoning (slower) | `/model deepseek-r1:8b` |
-| **codeqwen** | 4.2 GB | Alternative analysis | `/model codeqwen` |
+| **gemma4:e4b** | 9.6 GB | Logic-heavy tasks | `/model gemma4:e4b` |
 | **nomic-embed-text** | 274 MB | Required for `/embed` | *(auto-used)* |
-| **all-minilm** | 45 MB | Lightweight embeddings | *(auto-used)* |
+| **all-minilm** | 45 MB | Lightweight embeddings (fallback) | *(auto-used)* |
 
-### Remove unused models to save disk
+### New model needed?
 
 ```bash
-ollama rm deepseek-ocr:latest llama3:latest Nova:latest codellama:7b codellama:13b llama3.2:3b
+ollama pull <model-name>
 ```
+Then inside the TUI: `/refresh` to see it, `/model <name>` to activate it.
 
 ---
 
-## Text Selection
+## Text Selection & Copying
 
-| Mode | Command | Selection |
-|---|---|---|
-| **Full-screen (default)** | `wiki` | Hold **Shift** + click-drag, or **Ctrl+Shift+C** to copy |
-| **Inline** | `wiki --select` | Free click-drag selection with mouse |
+| Action | How |
+|---|---|
+| **Click-drag + release** | Auto-copies visible text to clipboard |
+| **`/clip`** | Copy entire viewport to clipboard |
+| **`wiki --select`** | Inline mode (native terminal selection) |
+
+During a click-drag, the selected lines are **highlighted** and the input box shows
+`SELECTING — release mouse button to copy text to clipboard`.
 
 ---
 
@@ -113,29 +146,18 @@ ollama rm deepseek-ocr:latest llama3:latest Nova:latest codellama:7b codellama:1
 |---|---|
 | `/scan` | Scan current directory for files |
 | `/files` | List scanned files |
-| `/ingest @file` | Parse file and register as active dataset (seconds) |
+| `/ingest @file` | Parse file and register as active dataset (< 1 second) |
 | `/infer @file` | Auto-detect file format |
-| `/embed` | Embed active dataset for RAG search (slow, background) |
+| `/embed` | Embed for RAG chat (optional, slow — see progress with ETA) |
 
-### Chat & RAG
-
-| Command | Description |
-|---|---|
-| *(type a question)* | Auto-RAG searches KB if embedded |
-| `/model <name>` | Switch active LLM model |
-| `/models` | List available models |
-| `/clear` | Clear conversation |
-| `/cancel` | Cancel current operation |
-| `@filename` | Reference a file in chat |
-
-### Ranking
+### Agentic Ranking
 
 | Command | Description |
 |---|---|
-| `/rank <topic>` | Score every row against a research topic |
-| `/compare [<topic>]` | Compare rankings side-by-side |
-| `/discard <threshold>` | Preview and confirm row removal |
-| `/discard --preview <t>` | Preview without confirmation |
+| `/rank <topic>` | Rank dataset by relevance (sends schema to coder LLM, seconds) |
+| `/compare [<topic>]` | Re-rank with refined topic, compare side-by-side |
+| `/discard <threshold>` | Remove rows below relevance score |
+| `/discard --preview <t>` | Preview without confirming |
 | `/discard --reset` | Restore all discarded rows |
 
 ### Charts
@@ -154,9 +176,9 @@ ollama rm deepseek-ocr:latest llama3:latest Nova:latest codellama:7b codellama:1
 
 | Command | Description |
 |---|---|
-| `/export` | Export conversation to Excel |
-| `/export --ranked` | Export ranked dataset with scores |
-| `/export --format=csv\|json\|md\|xlsx` | Choose format |
+| `/export` | Export dataset to Excel |
+| `/export --ranked` | Include relevance scores, sorted descending |
+| `/export --format=csv|json|xlsx` | Choose format |
 | `/export --output=<path>` | Specify output file |
 
 ### System
@@ -164,7 +186,21 @@ ollama rm deepseek-ocr:latest llama3:latest Nova:latest codellama:7b codellama:1
 | Command | Description |
 |---|---|
 | `/wizard` | System check and setup assistant |
-| `/help` | Show all commands |
+| `/model <name>` | Switch active LLM model |
+| `/models` | List available models |
+| `/refresh` | Reload model list from Ollama |
+| `/clear` | Clear conversation |
+| `/system <text>` | Set custom system prompt |
+| `/help [command]` | Show summary or man page for a command |
+| `/panel` | Toggle right info panel |
+| `/clip` | Copy viewport text to clipboard |
+| `/cancel` | Cancel current operation |
+| `/exit` | Quit |
+
+### Bookmarks & History
+
+| Command | Description |
+|---|---|
 | `/bookmark <title>` | Save current finding |
 | `/bookmarks` | List bookmarks |
 | `/history` | Recent query history |
@@ -172,51 +208,68 @@ ollama rm deepseek-ocr:latest llama3:latest Nova:latest codellama:7b codellama:1
 | `/flaws` | Known issues and solutions |
 | `/task <desc>` | Add a task |
 | `/tasks` | List tasks |
-| `/exit` | Quit |
+
+### File References (in chat)
+
+| Syntax | Description |
+|---|---|
+| `@filename` | Reference a file (works without /scan) |
+| `@path/to/file` | Reference by relative path |
 
 ---
 
 ## Feature Overview
 
-### Context Compaction
-When the conversation exceeds ~70% of the model's context window, older messages are automatically summarized by the LLM and replaced with a compact context entry. The last 4 messages stay intact. This preserves conversation flow without hitting token limits.
+### Agentic Ranking (Key Feature)
+- `/rank` sends the **schema only** (not the data) to `qwen2.5-coder:7b`
+- LLM writes a **Pandas filter script** — executed locally, sandboxed
+- **O(1) LLM calls** regardless of dataset size
+- 92K rows ranked in **seconds** (not hours)
+- `/compare` for iterative refinement with visual deltas
+- `/discard` to remove low-relevance rows with preview
 
 ### RAG Knowledge Base
-- `/ingest` parses files locally (seconds) — no Python worker needed for `/rank`
-- `/embed` indexes chunks for RAG search (optional, runs in background)
-- Per-project storage in `.wiki/rag/`
-- Retrieved chunks are formatted as clean readable text (no raw JSON in prompts)
-
-### Relevance Ranking
-- `/rank` scores every row against a research topic using the LLM
-- Results sorted by relevance, stored for comparison
-- `/compare` shows side-by-side with score deltas
-- `/discard` removes low-scoring rows from the working set
+- `/ingest` parses files and registers them instantly — no Python worker needed for `/rank`
+- `/embed` indexes chunks for semantic search (optional, runs in background with live progress)
+- Chunk size: 4000 characters with 400 overlap (5x fewer chunks than default)
+- Metadata-aware: column headers preserved in context
+- ChromaDB per project (`.wiki/rag/`)
 
 ### Data Visualization
-- 7 chart types rendered as clean ASCII terminal graphics
+- 7 chart types rendered as ASCII terminal graphics
 - Auto-scales to terminal width
-- Column auto-detection if not specified
+- Export to PNG/SVG with `--export` flag
 
 ### Smart Export
-- Export to Excel (`.xlsx`), CSV, JSON, or Markdown
-- `--ranked` flag includes relevance scores
+- Excel (`.xlsx`), CSV, JSON
+- `--ranked` flag includes `relevance_score` column
 - Formula injection protection
+- Auto-column width and type formatting
 
 ### Auto-Format Detection
-- `/infer` detects file format by extension + magic bytes
+- `/infer` detects format by extension + magic bytes
 - Supports: CSV, TSV, JSONL, NDJSON, JSON arrays, XLSX, TXT, MD
+
+### Text Selection
+- Click-drag anywhere in the TUI → auto-copy to clipboard
+- Selected lines are **highlighted** visually
+- `/clip` command copies entire viewport
+
+### Man-Page Help System
+- `/help` shows a summary (like `command --help`)
+- `/help <command>` shows full man page for that command
+- Every man page includes: NAME, SYNOPSIS, DESCRIPTION, BEHAVIOR, EXAMPLE, SEE ALSO
 
 ---
 
 ## Performance Estimates (RTX 4060, 8GB VRAM)
 
-| Operation | Time |
-|---|---|
-| `/ingest` (parse 1GB file) | ~3 seconds |
-| `/rank` (score 92K rows) | ~3.8 hours |
-| `/embed` (92K chunks) | ~6 minutes |
-| Context compaction | ~30 seconds (LLM summarization) |
+| Operation | Time | Notes |
+|---|---|---|
+| `/ingest` (parse 1GB file) | < 1 second | Counts newlines in chunks |
+| `/rank` (score 92K rows) | **seconds** | Agentic RAG — 1 LLM call, not 92K |
+| `/embed` (1.1GB JSONL) | ~1-2 hours | 4000-char chunks, live ETA shown |
+| `/embed` (small file) | ~1-5 minutes | Depends on file size |
 
 ---
 
@@ -224,28 +277,37 @@ When the conversation exceeds ~70% of the model's context window, older messages
 
 ```
 mini_wiki_2.0/
-  main.go                       # Entry point
-  setup.sh                      # Automated dependency installer
-  rag_worker/                   # Python RAG engine (embedded in binary)
-    main.py, chunker.py, embedder.py, vectordb.py, ingester.py, querier.py
+  main.go                          # Entry point
+  setup.sh                         # Automated dependency installer
+  .venv/                           # Python virtual env (gitignored)
+  rag_worker/                      # Python engine (embedded in Go binary)
+    main.py                        # Stdin/stdout JSON protocol dispatcher
+    agentic_ranker.py              # Agentic RAG: LLM writes Pandas code, executes locally
+    chunker.py                     # Recursive text splitter (4000-char chunks)
+    embedder.py                    # Ollama /api/embed client
+    vectordb.py                    # ChromaDB wrapper
+    ingester.py                    # Document ingestion (CSV, JSONL, TXT)
+    querier.py                     # RAG query pipeline + call_llm()
+    requirements.txt
   internal/
-    app/app.go                  # Bubbletea TUI (model, update, view)
-    chart/chart.go              # 7 ASCII chart types
-    config/manager.go           # YAML config
-    conversation/types.go       # Message & thread types
-    csvparser/parser.go         # Streaming CSV parser
-    dataset/dataset.go          # Shared data types
-    export/exporter.go          # XLSX/CSV/JSON/MD export
-    fileref/resolver.go         # @file reference resolver
-    filescanner/scanner.go      # Safe directory scanner
-    jsonlparser/parser.go       # JSONL streaming parser
-    memory/memory.go            # Tool memory (skills, flaws)
-    modelmgr/manager.go         # Model lifecycle
-    ollama/                     # Ollama HTTP client + launcher
-    projectkb/projectkb.go      # Per-project SQLite KB
-    rag/client.go               # Go RAG client (spawns Python worker)
-    ranking/ranker.go           # Relevance ranking engine
-    wiki/errors.go              # Structured error types
+    app/app.go                     # Bubbletea TUI (model, update, view)
+    chart/chart.go                 # 7 ASCII chart types + PNG export
+    config/manager.go              # YAML config (~/.config/mini-wiki/)
+    conversation/types.go          # Message & thread types
+    csvparser/parser.go            # Streaming CSV parser
+    dataset/dataset.go             # Shared data types (Dataset, Row, Column)
+    export/exporter.go             # XLSX/CSV/JSON/MD export
+    fileref/resolver.go            # @file reference resolver
+    filescanner/scanner.go         # Safe directory scanner
+    jsonlparser/parser.go          # JSONL streaming parser
+    kb/db.go                       # SQLite knowledge base (FTS5)
+    memory/memory.go               # Tool memory (skills, flaws, session)
+    modelmgr/manager.go            # Model lifecycle & fallback
+    ollama/                        # Ollama HTTP client + process launcher
+    projectkb/projectkb.go         # Per-project SQLite KB
+    rag/client.go                  # Go RAG client (spawns Python worker)
+    ranking/ranker.go              # Agentic ranking engine
+    wiki/errors.go                 # Structured error types (26 kinds)
 ```
 
 ---
@@ -254,11 +316,23 @@ mini_wiki_2.0/
 
 | Problem | Solution |
 |---|---|
-| `Python error: ModuleNotFoundError` | `pip install chromadb ollama unstructured pypdf` |
+| `Python error: ModuleNotFoundError` | `.venv/bin/pip install chromadb ollama unstructured pypdf pandas` |
 | `Ollama is not reachable` | `ollama serve` |
-| `/rank says "no dataset ingested"` | Run `/ingest @file.csv` first |
+| `/rank says "no dataset ingested"` | Run `/ingest @dataset.csv` first |
+| `/rank says "RAG worker unavailable"` | Try `/embed` first (needed for the Python worker) |
 | `/ingest or /embed hangs` | Press **Escape** to cancel |
-| Text selection in full-screen | Hold **Shift** + click-drag, or use `wiki --select` |
+| Text selection in full-screen | Click-drag to select, release to auto-copy. Or `/clip` |
 | Layout broken | Resize terminal to at least 80x24 |
-| Slow responses | Try `/model deepseek-coder` or `/model codeqwen` |
-| Context window limit | Auto-compaction kicks in at 70% — just keep chatting |
+| Model not listed in `/models` | Run `/refresh` |
+| Slow /embed | Increase chunk size or use a smaller dataset. Press Escape to cancel |
+
+---
+
+## How to Get Help
+
+Inside the TUI:
+- `/help` — command summary
+- `/help rank` — full man page for ranking
+- `/help chart` — full man page for charts
+- `/help ingest` — full man page for ingestion
+- `/help <any command>` — man page for that command
