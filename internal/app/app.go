@@ -260,10 +260,6 @@ var (
 			Foreground(tokyoComment).
 			Padding(0, 1)
 
-	selHighlightStyle = lipgloss.NewStyle().
-			Background(tokyoOverlay).
-			Foreground(tokyoCyan)
-
 	// Input box with subtle border
 	inputBoxStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
@@ -328,12 +324,6 @@ type Application struct {
 
 	// Right info panel visibility
 	showInfoPanel bool // false = hidden, full width for chat
-
-	// Mouse selection state
-	mouseSelecting bool  // true when user is dragging to select text
-	mouseDragStart int   // Y position where drag started
-	mouseDragEnd   int   // current Y position during drag
-	mouseDragged    bool // true if mouse actually moved during drag
 
 	// UI components
 	input    textinput.Model
@@ -1258,43 +1248,9 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.updateSuggestions()
 		return a, cmd
 
-	// --- Mouse events (scrolling + text selection) ---
+	// --- Mouse events (scrolling only) ---
 	case tea.MouseMsg:
-		// Wheel events: pass to viewport for scrolling
-		if msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown {
-			a.viewport, _ = a.viewport.Update(msg)
-			return a, nil
-		}
-
-		// Left-click drag: track selection, auto-copy on release
-		if msg.Button == tea.MouseButtonLeft {
-			switch msg.Action {
-			case tea.MouseActionPress:
-				a.mouseSelecting = true
-				a.mouseDragStart = msg.Y
-				a.mouseDragEnd = msg.Y
-				a.mouseDragged = false
-				a.statusMsg = "Selecting... release to copy"
-				a.highlightSelection()
-				return a, nil
-
-			case tea.MouseActionMotion:
-				if a.mouseSelecting {
-					a.mouseDragged = true
-					a.mouseDragEnd = msg.Y
-					a.statusMsg = "Selecting... release to copy"
-					a.highlightSelection()
-				}
-				return a, nil
-
-			case tea.MouseActionRelease:
-				a.mouseSelecting = false
-				a.mouseDragged = false
-				a.viewport.SetContent(a.viewportContent)
-				return a, nil
-			}
-		}
-
+		a.viewport, _ = a.viewport.Update(msg)
 		return a, nil
 
 	// --- Task messages ---
@@ -1694,11 +1650,7 @@ func (a *Application) View() string {
 	}
 
 	// Bottom bar: model name left, token info right, with border
-	modelName := a.models.Active()
-	if a.mouseSelecting {
-		modelName = "[SELECTING] " + modelName
-	}
-	leftInfo := fmt.Sprintf(" %s ", modelName)
+	leftInfo := fmt.Sprintf(" %s ", a.models.Active())
 	rightInfo := fmt.Sprintf(" tokens: %d  |  models: %d ", a.estimatedTokens, len(a.models.Available()))
 
 	// Lay out left and right within available width
@@ -1752,9 +1704,6 @@ func (a *Application) View() string {
 	if a.streaming {
 		inputContent := fmt.Sprintf(" %s %s", a.spinner.View(), a.statusMsg)
 		inputRendered = inputBoxStyle.Width(w - 2).Render(inputContent)
-	} else if a.mouseSelecting {
-		// During mouse selection, the input box shows the selection prompt
-		inputRendered = inputBoxStyle.Width(w - 2).Render(" ── SELECTING ── release mouse button to copy text to clipboard")
 	} else {
 		inputLine := a.input.View()
 		if len(inputLine) > w-6 {
@@ -1936,43 +1885,6 @@ func (a *Application) appendLine(content string) {
 
 // highlightSelection modifies the viewport content to show visible
 // highlighting on the lines being selected by the user's mouse drag.
-func (a *Application) highlightSelection() {
-	if a.viewportContent == "" {
-		return
-	}
-	lines := strings.Split(a.viewportContent, "\n")
-	if len(lines) == 0 {
-		return
-	}
-
-	// Map mouse Y positions to content line numbers (accounting for scroll)
-	startLine := a.mouseDragStart + a.viewport.YOffset
-	endLine := a.mouseDragEnd + a.viewport.YOffset
-	if startLine > endLine {
-		startLine, endLine = endLine, startLine
-	}
-	if startLine < 0 {
-		startLine = 0
-	}
-	if endLine >= len(lines) {
-		endLine = len(lines) - 1
-	}
-
-	// Build highlighted content
-	var b strings.Builder
-	for i, line := range lines {
-		if i > 0 {
-			b.WriteString("\n")
-		}
-		if i >= startLine && i <= endLine {
-			b.WriteString(selHighlightStyle.Render(line))
-		} else {
-			b.WriteString(line)
-		}
-	}
-	a.viewport.SetContent(b.String())
-}
-
 func formatUserMsg(content string) string {
 	return "\n" + userMsgStyle.Render("You: " + content) + "\n"
 }
