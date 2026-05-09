@@ -1,10 +1,10 @@
 // mini-wiki: A standalone TUI AI Research Assistant powered by local LLMs.
 //
 // Usage:
-//   wiki                           # Full-screen TUI (text selection via Shift+click)
+//   wiki                           # Run from any directory (native text selection)
+//   wiki --alt                     # Alt-screen mode (Shift+click to select text)
 //   wiki --ollama http://...       # Custom Ollama endpoint
 //   wiki --no-start                # Don't auto-start Ollama
-//   wiki --select                  # Inline mode (free text selection with mouse)
 //
 // Commands (inside the TUI):
 //   /help          Show all commands
@@ -16,7 +16,6 @@
 //   /rank <topic>  Rank dataset by relevance (Agentic AI)
 //   /chart <type>  Visualize data (bar, trend, pie, scatter)
 //   /ingest <path> Read a file into context
-//   /clip          Copy viewport text to system clipboard
 //   /exit          Quit
 package main
 
@@ -45,7 +44,7 @@ func main() {
 	// Command-line flags
 	ollamaEndpoint := flag.String("ollama", "", "Ollama API endpoint (default: http://127.0.0.1:11434)")
 	noAutoStart := flag.Bool("no-start", false, "Don't auto-start Ollama; fail if not running")
-	inlineMode := flag.Bool("select", false, "Run inline (lets you select/copy text with mouse)")
+	altScreen := flag.Bool("alt", false, "Use alt-screen mode (Shift+click to select text)")
 	flag.Parse()
 
 	// --- Initialize config ---
@@ -109,11 +108,11 @@ func main() {
 	appModel := app.New(cfg, client, mm, ragDir)
 
 	// --- Run Bubbletea program ---
-	// Default: full-screen TUI (text selection via Shift+click).
-	// Use --select for inline mode (free text selection with mouse).
-	opts := []tea.ProgramOption{tea.WithAltScreen(), tea.WithMouseCellMotion()}
-	if *inlineMode {
-		opts = []tea.ProgramOption{tea.WithMouseCellMotion()}
+	// Default: inline mode — native terminal text selection works with the mouse.
+	// Use --alt for alt-screen mode (cleaner look, but need Shift+click to select).
+	var opts []tea.ProgramOption
+	if *altScreen {
+		opts = []tea.ProgramOption{tea.WithAltScreen(), tea.WithMouseCellMotion()}
 	}
 	p := tea.NewProgram(appModel, opts...)
 	appModel.SetProgram(p) // allow streaming progress from goroutines

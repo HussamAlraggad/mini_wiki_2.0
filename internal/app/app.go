@@ -215,14 +215,20 @@ var (
 			Padding(0, 1)
 
 	userMsgStyle = lipgloss.NewStyle().
-			Foreground(tokyoGreen)
+			Foreground(tokyoGreen).
+			Background(tokyoSurface).
+			Padding(0, 2)
 
 	assistantHeaderStyle = lipgloss.NewStyle().
 				Foreground(tokyoBlue).
-				Bold(true)
+				Bold(true).
+				Background(tokyoOverlay).
+				Padding(0, 2)
 
 	assistantMsgStyle = lipgloss.NewStyle().
-				Foreground(tokyoFg)
+				Foreground(tokyoFg).
+				Background(tokyoOverlay).
+				Padding(0, 2)
 
 	errorStyle = lipgloss.NewStyle().
 			Foreground(tokyoRed)
@@ -863,7 +869,8 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Ranked && a.currentRank != nil {
 			return a, exportRankedCmd(a, msg)
 		}
-		return a, exportCmd(a.exporter, a.thread, a.exportCfg, msg)
+		// Try exporting the dataset first; fall back to conversation
+		return a, exportDatasetCmd(a, msg)
 
 	case ExportComplete:
 		a.busy = false
@@ -1055,7 +1062,7 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, readNextChunkCmd(a.currentStream, a.streamModel, &a.streamContent)
 
 	case StreamChunk:
-		a.appendToViewport(msg.Text)
+		a.appendToViewport(assistantMsgStyle.Render(msg.Text))
 		return a, readNextChunkCmd(a.currentStream, a.streamModel, &a.streamContent)
 
 	case StreamDone:
@@ -1281,24 +1288,9 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return a, nil
 
 			case tea.MouseActionRelease:
-				if a.mouseSelecting && a.mouseDragged {
-					a.mouseSelecting = false
-					a.mouseDragged = false
-					// Restore original viewport content (remove highlighting)
-					a.viewport.SetContent(a.viewportContent)
-					if a.viewportContent != "" {
-						n := len(a.viewportContent)
-						if err := clipboard.WriteAll(a.viewportContent); err == nil {
-							a.appendLine(fmt.Sprintf("[Copied %d characters to clipboard]", n))
-							a.statusMsg = fmt.Sprintf("Copied %d chars", n)
-						} else {
-							a.statusMsg = fmt.Sprintf("Copy failed: %v", err)
-						}
-					}
-					return a, nil
-				}
 				a.mouseSelecting = false
 				a.mouseDragged = false
+				a.viewport.SetContent(a.viewportContent)
 				return a, nil
 			}
 		}
@@ -1982,7 +1974,12 @@ func (a *Application) highlightSelection() {
 }
 
 func formatUserMsg(content string) string {
-	return "\n───\n" + userMsgStyle.Render("You: ") + content + "\n"
+	return "\n" + userMsgStyle.Render("You: " + content) + "\n"
+}
+
+// formatAssistantMsg formats the assistant's response header with the model name.
+func formatAssistantMsg(model string) string {
+	return assistantHeaderStyle.Render(model + ":")
 }
 
 // --- Commands (tea.Cmd factories) ---
@@ -2303,6 +2300,71 @@ func fetchCmd(f webfetch.Fetcher, rawURL string, cfg webfetch.FetcherConfig) tea
 			return FetchFailed{Err: err}
 		}
 		return FetchComplete{Result: result}
+	}
+}
+
+// exportDatasetCmd exports the active dataset as-is (no ranking).
+// Falls back to conversation export if no dataset is available.
+func exportDatasetCmd(a *Application, msg ExportRequested) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		// Try to load the active dataset
+		projectDir := a.pkb.ProjectDir()
+		data, err := ranking.LoadDataset(projectDir)
+		if err != nil || data == nil || data.RowCount == 0 {
+			// Fall back to conversation export
+			return exportCmd(a.exporter, a.thread, a.exportCfg, msg)()
+		}
+
+		cfg := a.exportCfg
+		cfg.Format = msg.Format
+		if msg.Output != "" {
+			cfg.FileName = msg.Output
+		}
+
+		// Build export columns from dataset columns
+		columns := make([]export.ColumnDef, len(data.Columns))
+		for i, col := range data.Columns {
+			colType := "text"
+			switch col.Kind {
+			case dataset.ColumnInteger:
+				colType = "number"
+			case dataset.ColumnFloat:
+				colType = "number"
+			case dataset.ColumnBoolean:
+				colType = "boolean"
+			}
+			width := len(col.Name) + 5
+			if width < 15 {
+				width = 15
+			}
+			columns[i] = export.ColumnDef{Name: col.Name, Type: colType, Width: width}
+		}
+
+		// Build rows from dataset
+		rows := make([]export.Row, len(data.Rows))
+		for i, row := range data.Rows {
+			r := make(export.Row, len(data.Columns))
+			for j, col := range data.Columns {
+				val := fmt.Sprintf("%v", row.Data[col.Name])
+				r[j] = val
+			}
+			rows[i] = r
+		}
+
+		exportData := &export.ExportData{
+			SheetName: data.Name,
+			Columns:   columns,
+			Rows:      rows,
+		}
+
+		result, err := a.exporter.Export(ctx, exportData, cfg)
+		if err != nil {
+			return ExportFailed{Err: err}
+		}
+		return ExportComplete{Result: result}
 	}
 }
 

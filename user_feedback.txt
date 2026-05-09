@@ -1,271 +1,217 @@
-###############################
-Part 1:
-###############################
+1- Remove the "select to copy" feature entirly! It is so frustrating!!!! If I try to copy some text the entire chat get's copied!!!!!!
+2- I want to be able to select any content in the TUI with the mouse curser, whether by dragging or just clicking, is that possible???
+3- After so much effort I got able to copy and bring this text to you from the TUI:
 
-📋 The "Mini-Wiki" Evolution Plan: From RAG to Research: Phase 1: The Diagnosis (The "Why")The Issue: The current tool likely treats every row in a CSV as a "sentence." In research, a row isn't just text; it’s a data point with relationships to headers. Vector Search vs. Data Logic: Searching for "failed commits" via embeddings might find rows that look like failure but miss the actual boolean status=0 logic. The Latency Wall: 3.8 hours for 92k rows indicates the architecture is Linear (Row-by-Row) instead of Set-Based (Batch/Code).Phase 2: Strategic Pivot (The "Text-to-Analysis" Shift)Instead of standard RAG, the tool needs to implement Agentic Data Analysis.Feedback to Assistant: "Stop sending raw data rows to the LLM for ranking. Instead, send the schema (headers + data types) and have the LLM write a Python/Pandas script to perform the ranking locally."The Efficiency Gain: One LLM call generates a script that processes 92,000 rows in milliseconds. This takes /rank from hours to seconds.Phase 3: Model Tier Optimization (8B–10B Class)We need to swap general models for Specialists. Tell your assistant to update the setup.sh and internal logic to prioritize these:RoleRecommended ModelBenefit for ResearchLogic & ReasoningDeepSeek-R1 (8B)Use for the /rank logic and deep dataset synthesis.Code & SQLQwen 2.5 Coder (7B)Use for /chart and generating the Pandas scripts.Instruction FollowingHermes 3 (8B)Use for the TUI’s command parsing and tool-calling.Phase 4: Implementation Checklist (Technical Tasks)Give these specific tasks to your assistant to fix the "unsatisfying" results:Implement Metadata-Aware Chunker: Ensure the chunker.py doesn't just cut text. It must prepend the CSV headers to every chunk so the LLM doesn't lose context.Add a "Reasoning Loop" for Ranking: When /rank is called, the LLM should first explain its ranking criteria before assigning scores. This reduces "lazy" scoring.VRAM Budgeting: Configure the rag_worker to use Flash Attention 2 and 4-bit Quantization (K_M) to ensure the LLM and the Embedding model fit on the RTX 5060 simultaneously.TUI Feedback: Use the Progress bar in Go (Bubbletea) to show not just percent, but tokens per second and VRAM usage, so you can see if the hardware is throttling.Phase 5: The "Gold Standard" TestAsk your assistant to run a Recall Test:Take a known dataset with 100 rows where only 5 are relevant to a specific niche topic.Run /rank and /embed.If the top 5 results aren't those specific 5 rows, the Embedding Model or the Prompt Template needs adjustment.
+### The text shows the end of the embedding process, plus me accedently selecting text to copy...
 
-###############################
-Part 2:
-###############################
+  Line 2306/2306, 647851 chunks (est. 6s remaining)
+    Embedding 25/78 chunks...
+    Finished: 2306 lines, 647929 chunks indexed
+  Reading SWE_Next_dataset.jsonl (1073356 KB)...
+[Embed done] 647929 chunks indexed for RAG search
+[Copied 243862 characters to clipboard]
+[Copied 243902 characters to clipboard]
+
 
-# Architecture Review & Upgrade Plan: Mini-Wiki 2.0
+### And here, me trying the /scan, /refresh, and /help commands:
 
-**To:** [Insert Assistant's Name]
-**From:** Hussam
-**Date:** May 8, 2026
-**Subject:** Transitioning from Semantic RAG to Agentic RAG for Structured Data
+[38;2;86;95;137mScanned: 4 files, 2 dirs, 6.4 MB total in 0s[0m
+[38;2;86;95;137mSkipped 2 entries[0m
+[38;2;86;95;137mNAME[0m                                                                        
+[38;2;86;95;137m    mini-wiki - Standalone TUI Dataset RAG Analysis Tool[0m                    
+[38;2;86;95;137m[0m                                                                            
+[38;2;86;95;137mUSAGE[0m                                                                       
+[38;2;86;95;137m    wiki [options][0m                                                          
+[38;2;86;95;137m[0m                                                                            
+[38;2;86;95;137mOPTIONS[0m                                                                     
+[38;2;86;95;137m    --ollama <url>  Custom Ollama endpoint (default: http://127.0.0.1:11434)[0m
+[38;2;86;95;137m    --no-start      Fail if Ollama is not running (don't auto-start)[0m        
+[38;2;86;95;137m    --select        Inline mode (allows native text selection with mouse)[0m   
+[38;2;86;95;137m[0m                                                                            
+[38;2;86;95;137mCOMMANDS[0m                                                                    
+[38;2;86;95;137m    /help [command]  Show this summary or a man page for a specific command[0m 
+[38;2;86;95;137m[0m                                                                            
+[38;2;86;95;137m  DATA[0m                                                                      
+[38;2;86;95;137m    /ingest <path>   Read a file into context and register as active dataset[0m
+[38;2;86;95;137m    /export [opts]   Export dataset to xlsx/csv/json[0m                        
+[38;2;86;95;137m    /infer <file>    Auto-detect a file's format[0m                            
+[38;2;86;95;137m[0m                                                                            
+[38;2;86;95;137m  RANKING[0m                                                                   
+[38;2;86;95;137m    /rank <topic>        Rank dataset by relevance (Agentic AI, fast)[0m       
+[38;2;86;95;137m    /compare [<topic>]   Compare rankings with a refined topic[0m              
+[38;2;86;95;137m    /discard <threshold> Remove rows below a relevance score[0m                
+[38;2;86;95;137m[0m                                                                            
+[38;2;86;95;137m  VISUALIZATION[0m                                                             
+[38;2;86;95;137m    /chart <type> <args>  Generate charts (bar, trend, pie, scatter, etc.)[0m  
+[38;2;86;95;137m[0m                                                                            
+[38;2;86;95;137m  RAG[0m                                                                       
+[38;2;86;95;137m    /embed              Embed active dataset for semantic search (slow)[0m     
+[38;2;86;95;137m[0m                                                                            
+[38;2;86;95;137m  SYSTEM[0m                                                                    
+[38;2;86;95;137m    /model <name>   Switch the active LLM model[0m                             
+[38;2;86;95;137m    /models         List all available models[0m                               
+[38;2;86;95;137m    /refresh        Reload the model list from Ollama[0m                       
+[38;2;86;95;137m    /clear          Clear the conversation[0m                                  
+[38;2;86;95;137m    /system <text>  Set a new system prompt[0m                                 
+[38;2;86;95;137m    /wizard         Run an interactive system check / setup[0m                 
+[38;2;86;95;137m    /panel          Toggle the right info panel[0m                             
+[38;2;86;95;137m[0m                                                                            
+[38;2;86;95;137m  UTILITY[0m                                                                   
+[38;2;86;95;137m    /bookmark <title>  Save the current finding[0m                             
+[38;2;86;95;137m    /bookmarks         List all saved bookmarks[0m                             
+[38;2;86;95;137m    /history           Show recent query history[0m                            
+[38;2;86;95;137m    /skills            List all tool capabilities[0m                           
+[38;2;86;95;137m    /flaws             Show known issues and solutions[0m                      
+[38;2;86;95;137m    /task <desc>       Add a todo task[0m                                      
+[38;2;86;95;137m    /tasks             List all tasks[0m                                       
+[38;2;86;95;137m    /clip              Copy the viewport text to the system clipboard[0m       
+[38;2;86;95;137m    /exit              Quit the application[0m                                 
+[38;2;86;95;137m[0m                                                                            
+[38;2;86;95;137mEXAMPLES[0m                                                                    
+[38;2;86;95;137m    wiki[0m                                                                    
+[38;2;86;95;137m    wiki --ollama http://192.168.1.100:11434[0m                                
+[38;2;86;95;137m    wiki --no-start --select[0m                                                
+[38;2;86;95;137m[0m                                                                            
+[38;2;86;95;137mSEE ALSO[0m                                                                    
+[38;2;86;95;137m    /help rank     — Full documentation for the /rank command[0m               
+[38;2;86;95;137m    /help chart    — Full documentation for the /chart command[0m              
+[38;2;86;95;137m    /help ingest   — Full documentation for the /ingest command[0m             
+[38;2;86;95;137m    /help export   — Full documentation for the /export command[0m             
+[38;2;86;95;137m    /help embed    — Full documentation for the /embed command[0m              
 
-### Executive Summary
 
-Mini-wiki has a fantastic foundational architecture. The Go Bubbletea TUI and the local Python worker are highly effective for offline execution. However, during testing, we hit severe performance bottlenecks (e.g., `/rank` taking ~3.8 hours for 92K rows) and accuracy issues.
+### And here, me trying the /wizard command multiple times:
 
-This is because the current pipeline relies on **Semantic/Linear RAG** for structured data (CSVs). Moving forward, we need to transition the tool to an **Agentic RAG** architecture, where the LLM writes code to filter data rather than reading every row sequentially.
+=== System Check ===
 
-Please review the following three phases to upgrade the architecture.
+Go version: go version go1.24.4 linux/amd64
+Python: Python 3.12.3
+Ollama: ollama version is 0.20.6 (running)
+
+Python packages:
+   [ ] chromadb
+   [ ] ollama
+   [ ] unstructured
+   [ ] pypdf
+
+RAG storage: no RAG index found (run /ingest first)
+
+=== Recommendations ===
+Recommended: ollama pull nomic-embed-text
+Recommended: ollama pull gemma4:e4b
+First time: bash setup.sh
+
+
+### Here, I noticed the "no RAG index found", so I tried the recommended action:
+
+Ingested SWE_Next_dataset.jsonl — 2306 rows. Ready for /rank.
+  Run /embed to enable RAG search (optional, will take hours).
+
+
+### Here, the /wizard command again to confirm the RAG index:
+
+=== System Check ===
+
+Go version: go version go1.24.4 linux/amd64
+Python: Python 3.12.3
+Ollama: ollama version is 0.20.6 (running)
+
+Python packages:
+   [ ] chromadb
+   [ ] ollama
+   [ ] unstructured
+   [ ] pypdf
+
+RAG storage: no RAG index found (run /ingest first)
+
+=== Recommendations ===
+Recommended: ollama pull nomic-embed-text
+Recommended: ollama pull gemma4:e4b
+First time: bash setup.sh
+
+
+
+
+
+
+
+#################################################
+
+4- Explain the behavior I saw and told you about here in the feedback, please.
+5- After all this feedback getting explained, I want to know, can I now benefit from the ingestion and embedding? or did I inturrupt anything?
+6- I just tried to export and got this: "Export failed: no data to export"
+7- In the chat, it's better that my message is in a separate box with a background color, some to the AI reply... For example my message has the same background color as the right panel, and the AI has a brighter one, and don't forget to put some padding for the text inside. if this is not clear, I demand you to ask clarifying questions.
+8- Plus, I got this when tried to ask a question (due to the frustrating copy feature some text was lost):
+...recommend, mention the arguments to be used for the chart too.
+[1;38;2;121;162;247mdeepseek-r1:8b:[0mBased on the context provided, I'll help you create a chart from the dataset. Since the data appears to include statistical comparisons (e.g., `baseline_stats` and `contender_stats`), I recommend a **bar chart** for visualizing differences between two sets of metrics. Here's a breakdown:
 
 ---
 
-### Phase 1: The Core Fix – Agentic Filtering (The `/rank` Command)
-
-Currently, the Python worker is likely iterating over data chunks to score them row-by-row. Asking an 8B model to grade 92,000 rows sequentially is causing the 3.8-hour latency.
-
-**The Solution:** We must shift from "scoring rows" to "generating scripts."
-
-1. **Schema Extraction:** Instead of passing raw data to the LLM, extract only the column headers and the first 3 rows of the active dataset.
-2. **Code Generation:** Pass this schema to the LLM with a prompt asking it to act as a Data Scientist:
-* *"Here is the schema of a Pandas DataFrame. Write a Python script to filter out rows that are irrelevant to [Research Topic]. Output only the Python code."*
-
-
-3. **Local Execution:** Use the Python worker to execute (`exec()` or `eval()`) that generated script locally on the dataset.
-*Result:* We reduce 92,000 LLM calls down to **1 LLM call**, reducing `/rank` time from hours to seconds.
+### **Recommended Chart Type**
+**Bar Chart**  
+- **Purpose**: Compare numerical values between two groups (baseline vs. contender).  
+- **Why it fits**:  
+  - The data includes metrics like `segment_count` (from the `_join` method).  
+  - Bar charts excel at highlighting differences between categorical groups (e.g., baseline vs. contender).  
 
 ---
 
-### Phase 2: Pipeline & UI Stability (Go / VRAM Optimization)
+### **Example Implementation (Python with Matplotlib)**
+```python
+import matplotlib.pyplot as plt
 
-Because we are working within a strict **8GB VRAM** budget on an RTX 5060, the Go application (`main.go` / `modelmgr`) needs tighter control over the hardware.
+# Sample data (replace with your actual data)
+baseline_stats = {"segment_count": 100, "time": 20.5}  # Example baseline values
+contender_stats = {"segment_count": 150, "time": 15.2}  # Example contender values
 
-**1. Prevent VRAM Thrashing:**
-Currently, switching between models (e.g., `llama3.1` to a coder model) can cause the system to freeze if VRAM isn't cleared.
+# Extract data for plotting
+metrics = list(baseline_stats.keys())
+baseline_vals = [baseline_stats[m] for m in metrics]
+contender_vals = [contender_stats[m] for m in metrics]
 
-* **Action:** Before the Go app triggers a heavy Python task, send an API request to Ollama to forcefully unload the active chat model (set `keep_alive` to `0`). Clear the VRAM completely before spinning up the heavy analytical model.
+# Create the bar chart
+x = range(len(metrics))
+width = 0.35  # Width of bars
 
-**2. Remove/Adjust "Context Compaction":**
-Pausing the UI for 30 seconds to summarize old chat context ruins the offline experience.
+fig, ax = plt.subplots()
+ax.bar(x, baseline_vals, width, label="Baseline")
+ax.bar(x + width, contender_vals, width, label="Contender")
 
-* **Action:** Modern models have massive context windows (128k+). Disable aggressive context summarization and rely on Ollama's native KV-cache shifting. If we must summarize to save RAM, route it to a tiny background model (like a 1.5B model) so the main thread doesn't block.
+# Customize the chart
+ax.set_xlabel("Metrics", fontsize=12)
+ax.set_ylabel("Value", fontsize=12)
+ax.set_title("Comparison: Baseline vs. Contender", fontsize=14)
+ax.set_xticks(x + width / 2)  # Center ticks between bars
+ax.set_xticklabels(metrics)
+ax.legend()
 
-**3. Implement a Strict JSON Bridge for `/chart`:**
-If the LLM writes a Python script that analyzes our data, it cannot return the answer as conversational text, or the Go `chart.go` parser will break.
-
-* **Action:** Enforce strict JSON output from the Python worker. When returning data to the TUI, it must match a schema the Go app expects, for example:
-```json
-{
-  "chart_type": "bar",
-  "labels": ["Passed", "Failed"],
-  "values": [85, 12]
-}
-
+plt.tight_layout()
+plt.show()
 ```
 
+---
 
+### **Key Arguments for the Chart**
+1. **`metrics`**: List of metric names (e.g., `["segment_count", "time"]`).  
+   - *Source*: Derived from keys in `baseline_stats`/`contender_stats`.  
+2. **`baseline_vals`/`contender_vals`**: Numerical values for each metric.  
+   - *Source*: Values from `baseline_stats` and `contender_stats`.  
+3. **`width`**: Controls the bar width (adjust for readability).  
+4. **`label`**: Adds legends (e.g., `label="Baseline"`).  
+5. **`title`/`xlabel`/`ylabel`**: Customize labels for clarity.  
 
 ---
 
-### Phase 3: Update Local Model Roster (`setup.sh`)
-
-Standard chat models are too generic for our new Agentic architecture. Please update the `setup.sh` and model logic to default to these specialist models in the 8B class:
-
-* **For General Chat & Routing:** `llama3.1:8b` (Maintains high stability).
-* **For Logic & Deep Reasoning:** `deepseek-r1:8b` (Best for deep dataset synthesis).
-* **For Code Gen (The `/rank` Scripts):** `qwen2.5-coder:7b` (Exceptional at generating Pandas/SQL logic).
-* **For Strict JSON Formatting:** `hermes3` (Highly obedient for the JSON Bridge).
+### **Alternative Charts**
+- **Line Chart**: If tracking trends over iterations (not applicable here).  
+- **Scatter Plot**: For comparing two variables (not needed).  
+- **Box Plot**: If analyzing distributions (not the primary use case).  
 
 ---
 
-### Next Steps & Testing
+### **Next Steps**
+1. Confirm the metrics available in your dataset (e.g., `segment_count`, `time`, etc.).  
+2. Adjust the code to use your actual data (e.g., `SWE_Next_dataset.jsonl`).  
+3. Add error bars or confidence intervals if needed for statistical significance.  
 
-Once Phase 1 is implemented, please run a **Recall Test**:
-Create a dummy CSV with 1,000 rows, where only 5 specific rows relate to a niche topic. Run `/rank`. If the tool does not filter down to those exact 5 rows in under 15 seconds, we need to adjust the Python prompt templates (consider using Jinja2 templates for easier prompt tuning).
-
-Let me know once you have reviewed this so we can discuss the rollout timeline.
-
-###############################
-Part 3:
-###############################
-
-1. Model List Cleanup (Pruning the Garden)
-
-To optimize your 8GB VRAM and keep your tool's logic sharp, I recommend running these commands to remove the "Legacy" models:
-
-    Remove llama3:8b & llama3:latest: You already have llama3.1:8b, which is strictly better in every way (better logic, longer context). No reason to keep the old version.
-
-    Remove codellama:7b & codellama:13b: These are quite old now. Modern models like deepseek-r1:8b or qwen2.5-coder outperform them significantly in coding and logic. Plus, 13B models will often spill out of your 8GB VRAM, slowing down your system.
-
-    Remove deepseek-coder:latest (776 MB): Based on the size, this is the 1.3B parameter version. It’s too "small" for complex software research ranking. It will likely hallucinate your CSV logic.
-
-    Remove deepseek-ocr:latest: Unless you are specifically planning to scan photos of printed code or handwritten documents, this 6.7GB model is just taking up space. Your CSV/Excel data doesn't need OCR.
-
-The "Keep" List:
-
-    deepseek-r1:8b (Your primary research reasoner).
-
-    llama3.1:8b (Your stable general-purpose chat).
-
-    nomic-embed-text (Your RAG engine).
-
-    gemma4:e4b (Excellent for logic-heavy tasks).
-
-2. The Final Additions to the Plan
-
-To make the feedback document complete, add these two final sections. These address Reproducibility (vital for a researcher) and Security (vital for a software engineer).
-Phase 4: Research Provenance & Reproducibility
-
-As a researcher, you need to know why a model ranked a certain way three months from now.
-
-    The Feature: Implement a "Log Manifest" for every /rank or /export command.
-
-    The Action: When a dataset is ranked, the Go app should save a hidden .json file in .wiki/history/ that stores:
-
-        The exact model name and ID used.
-
-        The exact system prompt and user prompt.
-
-        The "Seed" number (if using deterministic settings).
-
-        This ensures that your research findings are reproducible.
-
-Phase 5: The "Safe-Eval" Sandbox
-
-Since we are moving to an Agentic RAG approach (where the LLM writes Python code to filter your CSVs), we must be careful.
-
-    The Risk: If an LLM hallucinates a command like os.remove() instead of a Pandas filter, it could damage your files.
-
-    The Action: Tell your assistant to use a restricted Python environment for the rag_worker. It should only have access to pandas, numpy, and json. Block access to os, sys, and subprocess within the execution string to keep your local research environment safe.
-
-3. Updated "Quick Start" Model Commands
-
-Tell your assistant to update the setup.sh to pull this "Power Trinity" for your tool:
-Bash
-
-# The Specialist Roster for Mini-Wiki
-ollama pull nomic-embed-text       # The Retriever (keep)
-ollama pull deepseek-r1:8b         # The Reasoner (keep)
-ollama pull qwen2.5-coder:7b       # The Data Scientist (new - pull this!)
-ollama pull hermes3:8b             # The Instruction Follower (new - pull this!)
-
-Final Summary of the "Mini-Wiki" Upgrade Plan
-
-    Shift to Agentic RAG: LLM writes Pandas code; doesn't read every row.
-
-    VRAM Management: Go app must clear VRAM before heavy tasks.
-
-    JSON Bridge: Python worker must return strict JSON for the TUI charts.
-
-    Model Cleanup: Prune legacy Llama3 and CodeLlama versions.
-
-    Provenance: Log everything for research reproducibility.
-
-    Security: Sandbox the Python code execution.
-
-
-###################
-###    NOTE    ####
-###################
-
-Moving the Brain to Python
-
-We need to take that ranking logic out of the Go loop and put it into a new "Agentic" Python command.
-
-Here is the exact code your assistant needs to add. You can copy and paste this directly into your feedback document.
-Step 1: Create rag_worker/agentic_ranker.py
-
-Have your assistant create this new file. This code reads the CSV schema, asks Qwen Coder to write a Pandas filter script, and executes it securely.
-Python
-
-import json
-import logging
-import pandas as pd
-from rag_worker.querier import call_llm
-
-logger = logging.getLogger(__name__)
-
-def agentic_rank(csv_path: str, topic: str, llm_model: str, ollama_base: str) -> dict:
-    """Uses an LLM to write and execute a Pandas script to filter a dataset."""
-    try:
-        # 1. Load data and extract schema (Do NOT send the whole file)
-        df = pd.read_csv(csv_path)
-        schema = {col: str(dtype) for col, dtype in df.dtypes.items()}
-        sample_rows = df.head(3).to_dict(orient="records")
-        
-        # 2. Prompt the Coder Model
-        system_prompt = (
-            "You are an expert Data Scientist. You write flawless Python Pandas code. "
-            "Never explain the code. Never use markdown formatting. ONLY output raw Python code."
-        )
-        
-        user_prompt = f"""
-        I have a Pandas DataFrame named `df`.
-        Schema: {schema}
-        Sample Data: {sample_rows}
-        
-        Task: Write a Python function named `filter_data(df)` that returns a new DataFrame containing 
-        ONLY the rows that are highly relevant to the research topic: "{topic}".
-        Include a new column called "relevance_score" (1 to 100) based on your logic.
-        """
-        
-        # 3. Get the code from Ollama
-        logger.warning(f"Asking {llm_model} to write Pandas script for topic: {topic}")
-        generated_code = call_llm(model=llm_model, system=system_prompt, user_message=user_prompt, base_url=ollama_base)
-        
-        # Strip markdown if the LLM disobeys
-        generated_code = generated_code.replace("```python", "").replace("
-```", "").strip()
-        
-        # 4. Safe Execution Sandbox
-        local_env = {"pd": pd}
-        exec(generated_code, local_env)  # Load the generated function into memory
-        
-        filter_function = local_env.get("filter_data")
-        if not filter_function:
-            raise ValueError("The LLM did not generate a 'filter_data' function.")
-            
-        # 5. Execute on the 92,000 rows (Takes ~0.1 seconds)
-        filtered_df = filter_function(df)
-        
-        # 6. Return as JSON for the Go TUI
-        result_json = filtered_df.to_dict(orient="records")
-        return {"type": "rank_done", "rows_kept": len(filtered_df), "data": result_json}
-
-    except Exception as e:
-        logger.exception("Agentic Rank Failed")
-        return {"type": "error", "message": f"Agentic filter failed: {str(e)}"}
-
-Step 2: Update rag_worker/main.py
-
-Tell your assistant to import the new function at the top of main.py:
-Python
-
-from rag_worker.agentic_ranker import agentic_rank
-
-Then, add the new command listener inside the main for line in sys.stdin: loop, right after the query block:
-Python
-
-            elif cmd_type == "rank":
-                path = cmd.get("path", "")
-                topic = cmd.get("topic", "")
-                current_llm = cmd.get("llm_model", "qwen2.5-coder:7b") # Force the coder model
-                
-                if not path or not topic:
-                    send_response({"type": "error", "message": "Missing path or topic"})
-                    continue
-                    
-                # Run the lightning-fast agentic ranker
-                result = agentic_rank(path, topic, current_llm, ollama_url)
-                send_response(result)
-
-Step 3: The Final Instruction for the Go Code (internal/ranking/ranker.go)
-
-Tell your assistant:
-
-    "Delete the for loop in ranker.go that iterates over the dataset. Instead, when the user types /rank, the Go app must simply send this JSON payload to the Python worker via stdin: {"cmd": "rank", "path": "/path/to/dataset.csv", "topic": "research topic"} and wait for the filtered JSON array to come back."
+Let me know if you need help adapting this to your specific dataset!
