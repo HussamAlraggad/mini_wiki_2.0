@@ -42,7 +42,7 @@ pip install chromadb ollama unstructured pypdf pandas
 
 # Required models
 ollama pull nomic-embed-text           # RAG embeddings (needed for /embed)
-ollama pull llama3.1:8b                # General chat (default)
+ollama pull gemma4:e4b                 # Default chat (131K context, thinking)
 
 # Recommended for Agentic Ranking
 ollama pull qwen2.5-coder:7b           # Code generation for /rank (fast)
@@ -109,7 +109,7 @@ Go TUI: display ranked table
 
 | Model | Size | Purpose | Command |
 |---|---|---|---|
-| **llama3.1:8b** | 4.9 GB | Default chat model | `/model llama3.1:8b` |
+| **gemma4:e4b** | 9.6 GB | Default chat (thinking enabled, 131K ctx) | `/model gemma4:e4b` |
 | **qwen2.5-coder:7b** | 4.7 GB | Code generation for Agentic Ranking | `/model qwen2.5-coder:7b` |
 | **deepseek-r1:8b** | 5.2 GB | Deep reasoning (slower) | `/model deepseek-r1:8b` |
 | **gemma4:e4b** | 9.6 GB | Logic-heavy tasks | `/model gemma4:e4b` |

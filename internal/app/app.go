@@ -2141,7 +2141,7 @@ func wizardCmd() tea.Cmd {
 		b.WriteString("\n=== Recommendations ===\n")
 		// Check if models are pulled
 		b.WriteString("Recommended: ollama pull nomic-embed-text\n")
-		b.WriteString("Recommended: ollama pull llama3.1:8b\n")
+		b.WriteString("Recommended: ollama pull gemma4:e4b\n")
 		b.WriteString("First time: bash setup.sh\n")
 
 		return WizardComplete{Text: b.String()}
@@ -2656,7 +2656,7 @@ DESCRIPTION
     Models recommended:
       deepseek-r1:8b    — Research reasoning, deep dataset synthesis
       qwen2.5-coder:7b  — Code generation for Agentic Ranking
-      llama3.1:8b       — Stable general-purpose chat
+      gemma4:e4b        — Default chat model (131K context, thinking enabled)
       gemma4:e4b        — Logic-heavy tasks
 
 EXAMPLE
@@ -3176,7 +3176,7 @@ func (a *Application) registerBuiltinSkills() {
 		{Name: "Export", Description: "Export conversation to .xlsx", Command: "/export", Category: "export", Models: nil},
 		{Name: "Bookmarks", Description: "Save and browse important findings", Command: "/bookmark", Category: "system", Models: nil},
 		{Name: "History", Description: "Browse query history", Command: "/history", Category: "system", Models: nil},
-		{Name: "SRS Pipeline", Description: "Full SRS generation: FR/NFR, MoSCoW, DFD, CSPEC, IEEE 830", Command: "/srs", Category: "srs", Models: []string{"qwen2.5-coder", "llama3.1"}, Parameters: "temperature: 0.1"},
+		{Name: "SRS Pipeline", Description: "Full SRS generation: FR/NFR, MoSCoW, DFD, CSPEC, IEEE 830", Command: "/srs", Category: "srs", Models: []string{"qwen2.5-coder", "gemma4"}, Parameters: "temperature: 0.1"},
 	}
 
 	for _, skill := range skills {
@@ -3657,7 +3657,7 @@ func (a *Application) compactThreadIfNeeded() {
 // Update the skills to mark SRS skills as implemented.
 func (a *Application) updateSRSModelSkills() {
 	skills := []memory.Skill{
-		{Name: "FR/NFR Extraction", Description: "Extract functional and non-functional requirements from data", Command: "/srs", Category: "srs", Models: []string{"qwen2.5-coder", "llama3.1"}, Parameters: "temperature: 0.1"},
+		{Name: "FR/NFR Extraction", Description: "Extract functional and non-functional requirements from data", Command: "/srs", Category: "srs", Models: []string{"qwen2.5-coder", "gemma4"}, Parameters: "temperature: 0.1"},
 		{Name: "MoSCoW Prioritization", Description: "Prioritize requirements using MoSCoW method", Command: "/srs", Category: "srs", Models: []string{"qwen2.5-coder"}, Parameters: "temperature: 0.1"},
 		{Name: "DFD Generation", Description: "Identify Data Flow Diagram components", Command: "/srs", Category: "srs", Models: []string{"qwen2.5-coder"}},
 		{Name: "CSPEC Logic", Description: "Create control specification tables", Command: "/srs", Category: "srs", Models: []string{"qwen2.5-coder"}},
