@@ -79,7 +79,7 @@ cp wiki ~/.local/bin/wiki
 
 ## How Agentic Ranking Works
 
-Traditional RAG scores every row individually via the LLM — **92,000 LLM calls** for a 92K-row dataset (hours).
+Traditional RAG scores every row individually via the LLM — **one API call per row** (hours for large datasets).
 
 **mini-wiki uses Agentic RAG**:
 
@@ -89,7 +89,7 @@ Traditional RAG scores every row individually via the LLM — **92,000 LLM calls
 4. The function runs **locally in a sandbox** (pandas/numpy/json only — no `os`/`sys`/`subprocess`)
 5. Returns filtered rows with `relevance_score` (1-100)
 
-**Result: 1 LLM call instead of 92,000. 92K rows ranked in seconds.**
+**Result: 1 LLM call regardless of dataset size. Rows ranked in seconds.**
 
 ```json
 {"cmd": "rank", "path": "dataset.csv", "topic": "research topic"}
@@ -224,7 +224,7 @@ During a click-drag, the selected lines are **highlighted** and the input box sh
 - `/rank` sends the **schema only** (not the data) to `qwen2.5-coder:7b`
 - LLM writes a **Pandas filter script** — executed locally, sandboxed
 - **O(1) LLM calls** regardless of dataset size
-- 92K rows ranked in **seconds** (not hours)
+- Datasets of any size ranked in **seconds** (not hours)
 - `/compare` for iterative refinement with visual deltas
 - `/discard` to remove low-relevance rows with preview
 
@@ -267,8 +267,8 @@ During a click-drag, the selected lines are **highlighted** and the input box sh
 | Operation | Time | Notes |
 |---|---|---|
 | `/ingest` (parse 1GB file) | < 1 second | Counts newlines in chunks |
-| `/rank` (score 92K rows) | **seconds** | Agentic RAG — 1 LLM call, not 92K |
-| `/embed` (1.1GB JSONL) | ~1-2 hours | 4000-char chunks, live ETA shown |
+| `/rank` (any dataset) | **seconds** | Agentic RAG — 1 LLM call |
+| `/embed` (large file) | ~1-2 hours | 4000-char chunks, live ETA shown |
 | `/embed` (small file) | ~1-5 minutes | Depends on file size |
 
 ---
