@@ -39,6 +39,7 @@ from rag_worker.vectordb import VectorDB
 from rag_worker.ingester import ingest_file, IngestionResult
 from rag_worker.querier import query, QueryResult
 from rag_worker.agentic_ranker import agentic_rank
+from rag_worker.agentic_query import agentic_query
 
 logging.basicConfig(
     level=logging.WARNING,
@@ -146,6 +147,18 @@ def main():
                     "sources": result.sources,
                     "model": result.model,
                 })
+
+            elif cmd_type == "query_agentic":
+                path = cmd.get("path", "")
+                question = cmd.get("text", "")
+                current_llm = cmd.get("llm_model", "qwen2.5-coder:7b")
+
+                if not path or not question:
+                    send_response({"type": "error", "message": "Missing path or question"})
+                    continue
+
+                result = agentic_query(path, question, current_llm, ollama_url)
+                send_response(result)
 
             elif cmd_type == "status":
                 total = vector_db.count()

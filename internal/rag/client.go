@@ -371,6 +371,33 @@ func (c *Client) Rank(path, topic, llmModel string) (*Response, error) {
 	return resp, nil
 }
 
+// QueryAgentic sends a natural language question to the Python worker for
+// Pandas-powered answering. The worker loads the dataset, generates a Pandas
+// query via LLM, executes it, and returns the answer. No RAG/embed needed.
+func (c *Client) QueryAgentic(datasetPath, question, llmModel string) (*Response, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	req := Request{
+		Cmd:      "query_agentic",
+		Path:     datasetPath,
+		Text:     question,
+		LLMModel: llmModel,
+	}
+	if err := c.sendRequest(req); err != nil {
+		return nil, err
+	}
+
+	resp, err := c.readResponse()
+	if err != nil {
+		if c.lastError != "" {
+			return nil, fmt.Errorf("worker error: %s", c.lastError)
+		}
+		return nil, err
+	}
+	return resp, nil
+}
+
 // Status retrieves the current index statistics from the worker.
 func (c *Client) Status() (map[string]interface{}, error) {
 	c.mu.Lock()

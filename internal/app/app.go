@@ -579,8 +579,26 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			})
 		}()
 
-	// Auto-RAG: search the vector database for relevant context
-	// (silently injects into the prompt, does NOT appear in chat display)
+	// Agentic Query + Auto-RAG: try to answer from data first, then enrich with RAG context.
+	// Agentic: send schema + question to coder LLM, generate Pandas query, execute locally.
+	// This works immediately without /embed, for any structured dataset question.
+	agenticAnswer := ""
+	if a.pkb != nil {
+		if projectDir := a.pkb.ProjectDir(); projectDir != "" {
+			if ds, err := ranking.LoadDataset(projectDir); err == nil && ds.SourceFile != "" {
+				if errMsg := a.ensureRAGStarted(); errMsg == "" {
+					if resp, err := a.ragClient.QueryAgentic(ds.SourceFile, content, "qwen2.5-coder:7b"); err == nil && resp.Type == "query_answer" {
+						agenticAnswer = resp.Answer
+					}
+				}
+			}
+		}
+	}
+	if agenticAnswer != "" {
+		content = fmt.Sprintf("[Data analysis result: %s]\n\nUser question: %s", agenticAnswer, content)
+	}
+
+	// Auto-RAG: search the vector database for relevant context (embedding optional)
 	ragResult, _ := a.queryRAG(content, 3)
 	if ragResult != nil && len(ragResult.Sources) > 0 {
 		var ragParts []string
