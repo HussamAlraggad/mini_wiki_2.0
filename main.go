@@ -1,8 +1,8 @@
 // mini-wiki: A standalone TUI AI Research Assistant powered by local LLMs.
 //
 // Usage:
-//   wiki                           # Run from any directory (native text selection)
-//   wiki --alt                     # Alt-screen mode (Shift+click to select text)
+//   wiki                           # Full-screen TUI (Shift+click to select text)
+//   wiki --inline                  # Inline mode (native click-drag selection)
 //   wiki --ollama http://...       # Custom Ollama endpoint
 //   wiki --no-start                # Don't auto-start Ollama
 //
@@ -44,7 +44,7 @@ func main() {
 	// Command-line flags
 	ollamaEndpoint := flag.String("ollama", "", "Ollama API endpoint (default: http://127.0.0.1:11434)")
 	noAutoStart := flag.Bool("no-start", false, "Don't auto-start Ollama; fail if not running")
-	altScreen := flag.Bool("alt", false, "Use alt-screen mode (Shift+click to select text)")
+	inlineMode := flag.Bool("inline", false, "Inline mode (native click-drag text selection)")
 	flag.Parse()
 
 	// --- Initialize config ---
@@ -108,11 +108,11 @@ func main() {
 	appModel := app.New(cfg, client, mm, ragDir)
 
 	// --- Run Bubbletea program ---
-	// Default: inline mode — native terminal text selection works with the mouse.
-	// Use --alt for alt-screen mode (cleaner look, but need Shift+click to select).
-	var opts []tea.ProgramOption
-	if *altScreen {
-		opts = []tea.ProgramOption{tea.WithAltScreen(), tea.WithMouseCellMotion()}
+	// Default: alt-screen mode (clean full-screen TUI, text selection via Shift+click).
+	// Use --inline for inline mode (native click-drag text selection with mouse).
+	opts := []tea.ProgramOption{tea.WithAltScreen(), tea.WithMouseCellMotion()}
+	if *inlineMode {
+		opts = []tea.ProgramOption{}
 	}
 	p := tea.NewProgram(appModel, opts...)
 	appModel.SetProgram(p) // allow streaming progress from goroutines
