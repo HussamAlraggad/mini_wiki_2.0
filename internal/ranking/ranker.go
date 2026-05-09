@@ -447,7 +447,12 @@ func parseJSONL(path string) (*dataset.Dataset, error) {
 		IngestedAt: time.Now(),
 	}
 
+	// Use a large buffer (20MB) to handle JSONL lines up to 12MB+.
+	const maxLineSize = 20 * 1024 * 1024
 	scanner := bufio.NewScanner(f)
+	buf := make([]byte, maxLineSize)
+	scanner.Buffer(buf, maxLineSize)
+
 	fieldSet := make(map[string]bool)
 	var fields []string
 	rowIdx := 0
