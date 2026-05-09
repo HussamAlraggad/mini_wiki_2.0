@@ -1052,7 +1052,7 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, readNextChunkCmd(a.currentStream, a.streamModel, &a.streamContent)
 
 	case StreamChunk:
-		a.appendToViewport(assistantMsgStyle.Render(msg.Text))
+		a.appendToViewport(msg.Text)
 		return a, readNextChunkCmd(a.currentStream, a.streamModel, &a.streamContent)
 
 	case StreamDone:
