@@ -1208,9 +1208,7 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				a.updateSuggestions()
 				if len(a.suggestions) > 0 {
 					a.tabIndex = 0
-					selected := a.suggestions[0].text
-					a.input.SetValue(selected + " ")
-					a.input.SetCursor(len(selected) + 1)
+					a.applySuggestion(a.suggestions[0].text)
 					return a, nil
 				}
 			}
@@ -3094,8 +3092,34 @@ func (a *Application) cycleSuggestion(val string) {
 
 	// Fill the input with the selected suggestion
 	selected := a.suggestions[a.tabIndex]
-	a.input.SetValue(selected.text + " ")
-	a.input.SetCursor(len(selected.text) + 1)
+	a.applySuggestion(selected.text)
+}
+
+// applySuggestion replaces the current input with the suggestion,
+// preserving any command prefix before the @ sign.
+func (a *Application) applySuggestion(suggestion string) {
+	val := a.input.Value()
+
+	// For @file completions: preserve everything before the @
+	if strings.HasPrefix(suggestion, "@") {
+		if idx := strings.LastIndex(val, "@"); idx >= 0 {
+			prefix := val[:idx]
+			a.input.SetValue(prefix + suggestion + " ")
+			a.input.SetCursor(len(prefix) + len(suggestion) + 1)
+			return
+		}
+	}
+
+	// For command completions: preserve the leading /
+	if strings.HasPrefix(suggestion, "/") && strings.HasPrefix(val, "/") {
+		a.input.SetValue(suggestion + " ")
+		a.input.SetCursor(len(suggestion) + 1)
+		return
+	}
+
+	// Fallback: replace entire input
+	a.input.SetValue(suggestion + " ")
+	a.input.SetCursor(len(suggestion) + 1)
 }
 
 func (a *Application) clearSuggestions() {
