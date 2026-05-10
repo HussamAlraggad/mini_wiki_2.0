@@ -8,6 +8,34 @@
 
 ---
 
+## May 9 (late) -- Agentic Query, inline mode, export fix, chat styling (COMPLETE)
+
+### What was done
+- **Agentic Query**: New `rag_worker/agentic_query.py` — when you type a question in the TUI,
+  the tool sends the dataset schema + question to qwen2.5-coder, gets a Pandas query function,
+  executes it sandboxed, and injects the answer as LLM context. Works immediately after /ingest,
+  no /embed needed. RAG search also runs in parallel for subjective/textual questions.
+- **Default mode flipped**: Now inline mode by default (native terminal text selection works with
+  mouse). Added `--alt` flag for old alt-screen behavior.
+- **Removed auto-copy-on-drag**: The aggressive "click-drag copies entire viewport" behavior
+  is gone. Users can now select text naturally.
+- **/export fixes**: Now exports the **dataset** by default (not the conversation). Falls back
+  to conversation export if no dataset loaded.
+- **Chat message styling**: User messages have `tokyoSurface` (#1f2335) background with green text.
+  Assistant messages have `tokyoOverlay` (#24283b) background with white text. Both have padding.
+- **Embed completed**: 647,929 chunks indexed with 1500-char chunking (~4 hours).
+- **Streaming chunks**: Now rendered with assistantMsgStyle background during streaming.
+
+### Interface changes
+- `formatUserMsg()` now wraps the full message (header + content) in styled box
+- `formatAssistantMsg()` new helper for assistant header styling
+
+### What I struggled with / broke
+- The streaming chunk styling was tricky — wrapping each chunk in a style could create
+  visible gaps. Fixed by using style with no top/bottom padding (`Padding(0, 2)`).
+
+---
+
 ## May 9 -- Agentic RAG: /rank now uses LLM code generation (COMPLETE)
 
 ### What was done
@@ -192,8 +220,8 @@ All tests pass (9 suites, 15 new tests).
 
 | Attribute | Value |
 |---|---|---|
-| **Project Phase** | All 7 phases COMPLETE. Agentic RAG implemented for /rank. |
-| **Last action** | May 9 -- Agentic RAG: /rank uses LLM codegen instead of row-by-row. Model cleanup complete. qwen2.5-coder:7b pulling in background. |
+| **Project Phase** | All features complete. Agentic Ranking + Agentic Query + RAG integrated. |
+| **Last action** | May 9 (late) -- Agentic Query, inline mode default, export dataset fix, chat styling. Embed finished (647K chunks). |
 | **Go version** | 1.25.0 |
 | **Ollama version** | 0.20.6 (running) |
 | **Active model** | `gemma4:e4b` (8B params, 131K ctx, Q4_K_M) |

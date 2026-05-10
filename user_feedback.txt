@@ -1,217 +1,85 @@
-1- Remove the "select to copy" feature entirly! It is so frustrating!!!! If I try to copy some text the entire chat get's copied!!!!!!
-2- I want to be able to select any content in the TUI with the mouse curser, whether by dragging or just clicking, is that possible???
-3- After so much effort I got able to copy and bring this text to you from the TUI:
+I have a design update for the TUI, first of it must stays as is (in it's own terminal window), but with the following updates, as much as possible, no need to force anything:
+The plan:
+Role and Objective:
+You are an expert Terminal User Interface (TUI) developer. I need you to implement a specific UI design for a TUI application I am building using [INSERT FRAMEWORK HERE].
 
-### The text shows the end of the embedding process, plus me accedently selecting text to copy...
+Color Palette:
+Please use the following hex codes for styling the UI components. This is based on a Tokyo Night theme:
 
-  Line 2306/2306, 647851 chunks (est. 6s remaining)
-    Embedding 25/78 chunks...
-    Finished: 2306 lines, 647929 chunks indexed
-  Reading SWE_Next_dataset.jsonl (1073356 KB)...
-[Embed done] 647929 chunks indexed for RAG search
-[Copied 243862 characters to clipboard]
-[Copied 243902 characters to clipboard]
-
+Background: #1a1b26 (Use for the main application background)
 
-### And here, me trying the /scan, /refresh, and /help commands:
+Foreground / Text: #c0caf5 (Standard text color)
 
-[38;2;86;95;137mScanned: 4 files, 2 dirs, 6.4 MB total in 0s[0m
-[38;2;86;95;137mSkipped 2 entries[0m
-[38;2;86;95;137mNAME[0m                                                                        
-[38;2;86;95;137m    mini-wiki - Standalone TUI Dataset RAG Analysis Tool[0m                    
-[38;2;86;95;137m[0m                                                                            
-[38;2;86;95;137mUSAGE[0m                                                                       
-[38;2;86;95;137m    wiki [options][0m                                                          
-[38;2;86;95;137m[0m                                                                            
-[38;2;86;95;137mOPTIONS[0m                                                                     
-[38;2;86;95;137m    --ollama <url>  Custom Ollama endpoint (default: http://127.0.0.1:11434)[0m
-[38;2;86;95;137m    --no-start      Fail if Ollama is not running (don't auto-start)[0m        
-[38;2;86;95;137m    --select        Inline mode (allows native text selection with mouse)[0m   
-[38;2;86;95;137m[0m                                                                            
-[38;2;86;95;137mCOMMANDS[0m                                                                    
-[38;2;86;95;137m    /help [command]  Show this summary or a man page for a specific command[0m 
-[38;2;86;95;137m[0m                                                                            
-[38;2;86;95;137m  DATA[0m                                                                      
-[38;2;86;95;137m    /ingest <path>   Read a file into context and register as active dataset[0m
-[38;2;86;95;137m    /export [opts]   Export dataset to xlsx/csv/json[0m                        
-[38;2;86;95;137m    /infer <file>    Auto-detect a file's format[0m                            
-[38;2;86;95;137m[0m                                                                            
-[38;2;86;95;137m  RANKING[0m                                                                   
-[38;2;86;95;137m    /rank <topic>        Rank dataset by relevance (Agentic AI, fast)[0m       
-[38;2;86;95;137m    /compare [<topic>]   Compare rankings with a refined topic[0m              
-[38;2;86;95;137m    /discard <threshold> Remove rows below a relevance score[0m                
-[38;2;86;95;137m[0m                                                                            
-[38;2;86;95;137m  VISUALIZATION[0m                                                             
-[38;2;86;95;137m    /chart <type> <args>  Generate charts (bar, trend, pie, scatter, etc.)[0m  
-[38;2;86;95;137m[0m                                                                            
-[38;2;86;95;137m  RAG[0m                                                                       
-[38;2;86;95;137m    /embed              Embed active dataset for semantic search (slow)[0m     
-[38;2;86;95;137m[0m                                                                            
-[38;2;86;95;137m  SYSTEM[0m                                                                    
-[38;2;86;95;137m    /model <name>   Switch the active LLM model[0m                             
-[38;2;86;95;137m    /models         List all available models[0m                               
-[38;2;86;95;137m    /refresh        Reload the model list from Ollama[0m                       
-[38;2;86;95;137m    /clear          Clear the conversation[0m                                  
-[38;2;86;95;137m    /system <text>  Set a new system prompt[0m                                 
-[38;2;86;95;137m    /wizard         Run an interactive system check / setup[0m                 
-[38;2;86;95;137m    /panel          Toggle the right info panel[0m                             
-[38;2;86;95;137m[0m                                                                            
-[38;2;86;95;137m  UTILITY[0m                                                                   
-[38;2;86;95;137m    /bookmark <title>  Save the current finding[0m                             
-[38;2;86;95;137m    /bookmarks         List all saved bookmarks[0m                             
-[38;2;86;95;137m    /history           Show recent query history[0m                            
-[38;2;86;95;137m    /skills            List all tool capabilities[0m                           
-[38;2;86;95;137m    /flaws             Show known issues and solutions[0m                      
-[38;2;86;95;137m    /task <desc>       Add a todo task[0m                                      
-[38;2;86;95;137m    /tasks             List all tasks[0m                                       
-[38;2;86;95;137m    /clip              Copy the viewport text to the system clipboard[0m       
-[38;2;86;95;137m    /exit              Quit the application[0m                                 
-[38;2;86;95;137m[0m                                                                            
-[38;2;86;95;137mEXAMPLES[0m                                                                    
-[38;2;86;95;137m    wiki[0m                                                                    
-[38;2;86;95;137m    wiki --ollama http://192.168.1.100:11434[0m                                
-[38;2;86;95;137m    wiki --no-start --select[0m                                                
-[38;2;86;95;137m[0m                                                                            
-[38;2;86;95;137mSEE ALSO[0m                                                                    
-[38;2;86;95;137m    /help rank     — Full documentation for the /rank command[0m               
-[38;2;86;95;137m    /help chart    — Full documentation for the /chart command[0m              
-[38;2;86;95;137m    /help ingest   — Full documentation for the /ingest command[0m             
-[38;2;86;95;137m    /help export   — Full documentation for the /export command[0m             
-[38;2;86;95;137m    /help embed    — Full documentation for the /embed command[0m              
+Selection: #283457 (Use for highlighted items in menus/lists)
 
+Comment / Muted Text: #565f89 (Use for secondary text, placeholder text, or less important stats)
 
-### And here, me trying the /wizard command multiple times:
+Cursor: #c0caf5 (Use for the input cursor)
 
-=== System Check ===
+Line Highlight / Alternate Background: #292e42 (Use for message bubbles or input background to distinguish them from the main background)
 
-Go version: go version go1.24.4 linux/amd64
-Python: Python 3.12.3
-Ollama: ollama version is 0.20.6 (running)
+Border / Subtle: #3b4261 (Use for all dividing lines, panel borders, and separators)
 
-Python packages:
-   [ ] chromadb
-   [ ] ollama
-   [ ] unstructured
-   [ ] pypdf
+Overall Layout:
+The application should take up the full terminal window and is divided into four main sections:
 
-RAG storage: no RAG index found (run /ingest first)
+Header (Top): A horizontal bar spanning the full width.
 
-=== Recommendations ===
-Recommended: ollama pull nomic-embed-text
-Recommended: ollama pull gemma4:e4b
-First time: bash setup.sh
+Left Panel - Chat & Input (Main Area): Takes up roughly 75-80% of the screen width.
 
+Right Panel - Sidebar: Takes up the remaining 20-25% of the screen width.
 
-### Here, I noticed the "no RAG index found", so I tried the recommended action:
+Footer (Bottom): A horizontal bar spanning the full width.
 
-Ingested SWE_Next_dataset.jsonl — 2306 rows. Ready for /rank.
-  Run /embed to enable RAG search (optional, will take hours).
+Detailed Component Breakdown:
 
+1. Header:
 
-### Here, the /wizard command again to confirm the RAG index:
+Centered text reading: "Mini Wiki | Project Title"
 
-=== System Check ===
+A solid horizontal bottom border separating it from the main content, using the Border color (#3b4261).
 
-Go version: go version go1.24.4 linux/amd64
-Python: Python 3.12.3
-Ollama: ollama version is 0.20.6 (running)
+2. Left Panel (Chat History & Input):
 
-Python packages:
-   [ ] chromadb
-   [ ] ollama
-   [ ] unstructured
-   [ ] pypdf
+Chat History Area: * Occupies the top ~80% of the left panel.
 
-RAG storage: no RAG index found (run /ingest first)
+Displays alternating messages (User vs. Assistant).
 
-=== Recommendations ===
-Recommended: ollama pull nomic-embed-text
-Recommended: ollama pull gemma4:e4b
-First time: bash setup.sh
+Assistant messages should have a slightly different background (#292e42) to stand out from the main background (#1a1b26).
 
+Input Area (Bottom of Left Panel):
 
+Separated from the chat history by a solid horizontal border (#3b4261).
 
+Contains an active text input field with a block cursor.
 
+Autocomplete/Command Popup State: The input area needs to support a popup menu state (triggered by typing something like @hint_). When active, a vertical list of selectable options (e.g., @hint_1, @hint_2, @hint_3) should appear directly above the input line. The currently selected option in this menu should use the Selection color (#283457).
 
+Include a subtle left-hand accent border (using the Foreground or Muted text color) next to the active input/popup area to indicate focus.
 
+3. Right Panel (Sidebar):
 
-#################################################
+Separated from the Left Panel by a solid vertical border (#3b4261).
 
-4- Explain the behavior I saw and told you about here in the feedback, please.
-5- After all this feedback getting explained, I want to know, can I now benefit from the ingestion and embedding? or did I inturrupt anything?
-6- I just tried to export and got this: "Export failed: no data to export"
-7- In the chat, it's better that my message is in a separate box with a background color, some to the AI reply... For example my message has the same background color as the right panel, and the AI has a brighter one, and don't forget to put some padding for the text inside. if this is not clear, I demand you to ask clarifying questions.
-8- Plus, I got this when tried to ask a question (due to the frustrating copy feature some text was lost):
-...recommend, mention the arguments to be used for the chart too.
-[1;38;2;121;162;247mdeepseek-r1:8b:[0mBased on the context provided, I'll help you create a chart from the dataset. Since the data appears to include statistical comparisons (e.g., `baseline_stats` and `contender_stats`), I recommend a **bar chart** for visualizing differences between two sets of metrics. Here's a breakdown:
+Top aligned text.
 
----
+Content includes:
 
-### **Recommended Chart Type**
-**Bar Chart**  
-- **Purpose**: Compare numerical values between two groups (baseline vs. contender).  
-- **Why it fits**:  
-  - The data includes metrics like `segment_count` (from the `_join` method).  
-  - Bar charts excel at highlighting differences between categorical groups (e.g., baseline vs. contender).  
+"Session title" (Standard text)
 
----
+"Context" (Standard text, perhaps slightly bolded or designated as a sub-header)
 
-### **Example Implementation (Python with Matplotlib)**
-```python
-import matplotlib.pyplot as plt
+"139 tokens" (Use Comment/Muted color #565f89)
 
-# Sample data (replace with your actual data)
-baseline_stats = {"segment_count": 100, "time": 20.5}  # Example baseline values
-contender_stats = {"segment_count": 150, "time": 15.2}  # Example contender values
+"17% used" (Use Comment/Muted color #565f89)
 
-# Extract data for plotting
-metrics = list(baseline_stats.keys())
-baseline_vals = [baseline_stats[m] for m in metrics]
-contender_vals = [contender_stats[m] for m in metrics]
+4. Footer:
 
-# Create the bar chart
-x = range(len(metrics))
-width = 0.35  # Width of bars
+Separated from the Main Panels by a solid horizontal border (#3b4261).
 
-fig, ax = plt.subplots()
-ax.bar(x, baseline_vals, width, label="Baseline")
-ax.bar(x + width, contender_vals, width, label="Contender")
+Left-aligned text: "Mini Wiki • model_name" (Make "Mini Wiki" slightly brighter or bold, and "model_name" the Muted color).
 
-# Customize the chart
-ax.set_xlabel("Metrics", fontsize=12)
-ax.set_ylabel("Value", fontsize=12)
-ax.set_title("Comparison: Baseline vs. Contender", fontsize=14)
-ax.set_xticks(x + width / 2)  # Center ticks between bars
-ax.set_xticklabels(metrics)
-ax.legend()
+Right-aligned text: Current file path (e.g., ~/the/full/path/to/the/project). Use the Muted color (#565f89) for the base path and the standard Foreground color (#c0caf5) for the current active directory/project name.
 
-plt.tight_layout()
-plt.show()
-```
-
----
-
-### **Key Arguments for the Chart**
-1. **`metrics`**: List of metric names (e.g., `["segment_count", "time"]`).  
-   - *Source*: Derived from keys in `baseline_stats`/`contender_stats`.  
-2. **`baseline_vals`/`contender_vals`**: Numerical values for each metric.  
-   - *Source*: Values from `baseline_stats` and `contender_stats`.  
-3. **`width`**: Controls the bar width (adjust for readability).  
-4. **`label`**: Adds legends (e.g., `label="Baseline"`).  
-5. **`title`/`xlabel`/`ylabel`**: Customize labels for clarity.  
-
----
-
-### **Alternative Charts**
-- **Line Chart**: If tracking trends over iterations (not applicable here).  
-- **Scatter Plot**: For comparing two variables (not needed).  
-- **Box Plot**: If analyzing distributions (not the primary use case).  
-
----
-
-### **Next Steps**
-1. Confirm the metrics available in your dataset (e.g., `segment_count`, `time`, etc.).  
-2. Adjust the code to use your actual data (e.g., `SWE_Next_dataset.jsonl`).  
-3. Add error bars or confidence intervals if needed for statistical significance.  
-
-Let me know if you need help adapting this to your specific dataset!
+Implementation Request:
+Please provide the complete code to generate this layout. Ensure the borders connect cleanly and the layout is responsive to terminal resizing. Focus on getting the grid/layout and exact colors correct first.
