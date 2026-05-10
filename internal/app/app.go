@@ -191,88 +191,72 @@ type suggestionItem struct {
 
 var (
 	// Core palette
-	tokyoBg       = lipgloss.Color("#1a1b26")
-	tokyoSurface  = lipgloss.Color("#1f2335")
-	tokyoOverlay  = lipgloss.Color("#24283b")
-	tokyoFg       = lipgloss.Color("#c0caf5")
-	tokyoComment  = lipgloss.Color("#565f89")
-	tokyoBorder   = lipgloss.Color("#3b4261")
-	tokyoBlue     = lipgloss.Color("#7aa2f7")
-	tokyoCyan     = lipgloss.Color("#7dcfff")
-	tokyoGreen    = lipgloss.Color("#9ece6a")
-	tokyoOrange   = lipgloss.Color("#ff9e64")
-	tokyoPurple   = lipgloss.Color("#bb9af7")
-	tokyoRed      = lipgloss.Color("#f7768e")
-	tokyoYellow   = lipgloss.Color("#e0af68")
+	tokyoBg             = lipgloss.Color("#1a1b26")
+	tokyoSurface        = lipgloss.Color("#1f2335")
+	tokyoOverlay        = lipgloss.Color("#24283b")
+	tokyoFg             = lipgloss.Color("#c0caf5")
+	tokyoComment        = lipgloss.Color("#565f89")
+	tokyoBorder         = lipgloss.Color("#3b4261")
+	tokyoBlue           = lipgloss.Color("#7aa2f7")
+	tokyoCyan           = lipgloss.Color("#7dcfff")
+	tokyoGreen          = lipgloss.Color("#9ece6a")
+	tokyoOrange         = lipgloss.Color("#ff9e64")
+	tokyoPurple         = lipgloss.Color("#bb9af7")
+	tokyoRed            = lipgloss.Color("#f7768e")
+	tokyoYellow         = lipgloss.Color("#e0af68")
+	tokyoLineHighlight  = lipgloss.Color("#292e42") // assistant msg bg, input bg
+	tokyoSelection      = lipgloss.Color("#283457") // autocomplete selection
 
-	titleStyle = lipgloss.NewStyle().
+	// Header: centered title with bottom border
+	headerStyle = lipgloss.NewStyle().
+			Foreground(tokyoFg).
 			Bold(true).
-			Foreground(tokyoPurple).
-			Padding(0, 1)
+			Padding(0, 2).
+			Border(lipgloss.NormalBorder(), false, true, false, false).
+			BorderForeground(tokyoBorder)
 
-	statusStyle = lipgloss.NewStyle().
-			Foreground(tokyoComment).
-			Padding(0, 1)
-
+	// User message: same bg as main background, green text
 	userMsgStyle = lipgloss.NewStyle().
 			Foreground(tokyoGreen).
-			Background(tokyoSurface).
+			Background(tokyoBg).
 			Padding(0, 2)
 
+	// Assistant header: model name with line-highlight bg
 	assistantHeaderStyle = lipgloss.NewStyle().
 				Foreground(tokyoBlue).
 				Bold(true).
-				Background(tokyoOverlay).
+				Background(tokyoLineHighlight).
 				Padding(0, 2)
 
+	// Assistant content: line-highlight bg, standard text
 	assistantMsgStyle = lipgloss.NewStyle().
 				Foreground(tokyoFg).
-				Background(tokyoOverlay).
+				Background(tokyoLineHighlight).
 				Padding(0, 2)
 
 	errorStyle = lipgloss.NewStyle().
 			Foreground(tokyoRed)
 
-	modelTagStyle = lipgloss.NewStyle().
-			Foreground(tokyoPurple).
-			Background(tokyoSurface).
-			Padding(0, 1).
-			Bold(true)
-
 	helpStyle = lipgloss.NewStyle().
 			Foreground(tokyoComment)
 
+	// Autocomplete popup: items use overlay bg, selection uses tokyoSelection
 	suggestionStyle = lipgloss.NewStyle().
 			Foreground(tokyoFg).
 			Background(tokyoOverlay).
 			Padding(0, 1)
 
-	hintStyle = lipgloss.NewStyle().
-			Foreground(tokyoComment).
-			Padding(0, 1)
-
-	bottomBarStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
+	// Footer: solid top border, two-aligned text
+	footerStyle = lipgloss.NewStyle().
+			Border(lipgloss.NormalBorder(), true, false, false, false).
 			BorderForeground(tokyoBorder).
-			Padding(0, 1)
-
-	bottomRightStyle = lipgloss.NewStyle().
-			Foreground(tokyoComment).
-			Padding(0, 1)
-
-	// Input box with subtle border
-	inputBoxStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(tokyoBorder).
-			Padding(0, 1)
-
-	headerStyle = lipgloss.NewStyle().
-			Foreground(tokyoFg).
-			Bold(true).
 			Padding(0, 2)
 
-	subHeaderStyle = lipgloss.NewStyle().
-			Foreground(tokyoComment).
+	// Input area: no rounded border, just a top separator line
+	inputBoxStyle = lipgloss.NewStyle().
+			Border(lipgloss.NormalBorder(), true, false, false, false).
+			BorderForeground(tokyoBorder).
+			Background(tokyoLineHighlight).
 			Padding(0, 2)
 
 	// Panel styles
@@ -281,20 +265,22 @@ var (
 
 	panelRightStyle = lipgloss.NewStyle().
 			Background(tokyoSurface).
-			Padding(1, 2)
-
-	panelFocusStyle = lipgloss.NewStyle().
-			Background(tokyoOverlay).
-			Padding(1, 2)
+			Padding(1, 2).
+			Border(lipgloss.NormalBorder(), false, false, true, false).
+			BorderForeground(tokyoBorder)
 
 	panelHeaderStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(tokyoBlue)
 
-	infoLabelStyle = lipgloss.NewStyle().
+	subHeaderStyle = lipgloss.NewStyle().
+			Foreground(tokyoComment).
+			Padding(0, 2)
+
+	panelLabelStyle = lipgloss.NewStyle().
 			Foreground(tokyoComment)
 
-	infoValueStyle = lipgloss.NewStyle().
+	panelValueStyle = lipgloss.NewStyle().
 			Foreground(tokyoFg)
 )
 
@@ -1613,25 +1599,22 @@ func (a *Application) View() string {
 		errText = "  ! " + a.pongMsg
 	}
 
-	// Project dir for header (centered)
+	// Project dir for header
 	projDir := ""
 	if a.pkb != nil {
 		projDir = a.pkb.ProjectDir()
 	}
-	shortDir := projDir
-	if len(shortDir) > 40 {
-		parts := strings.Split(shortDir, "/")
-		if len(parts) > 3 {
-			shortDir = parts[len(parts)-3] + "/" + parts[len(parts)-2] + "/" + parts[len(parts)-1]
-		}
-	}
 
-	// --- Centered project path header ---
-	padding := (w - len(shortDir)) / 2
-	if padding < 0 {
-		padding = 0
+	// --- Centered header: "Mini Wiki | Project" ---
+	headerTitle := "Mini Wiki | " + projDir
+	if len(headerTitle) > w-4 {
+		headerTitle = "Mini Wiki | ..." + projDir[len(projDir)-30:]
 	}
-	headerLine := headerStyle.Render(strings.Repeat(" ", padding) + shortDir)
+	hPad := (w - lipgloss.Width(headerTitle)) / 2
+	if hPad < 0 {
+		hPad = 0
+	}
+	headerLine := headerStyle.Render(strings.Repeat(" ", hPad) + headerTitle)
 
 	// --- Status sub-header ---
 	subLine := ""
@@ -1649,23 +1632,24 @@ func (a *Application) View() string {
 		suggestionText = suggestionStyle.Render(formatSuggestions(a.suggestions, a.tabIndex))
 	}
 
-	// Bottom bar: model name left, token info right, with border
-	leftInfo := fmt.Sprintf(" %s ", a.models.Active())
-	rightInfo := fmt.Sprintf(" tokens: %d  |  models: %d ", a.estimatedTokens, len(a.models.Available()))
-
-	// Lay out left and right within available width
-	// Inner area = (w - 2) - 2 (border) - 2 (padding) = w - 6
-	barContent := leftInfo
-	rightLen := lipgloss.Width(rightInfo)
-	leftLen := lipgloss.Width(leftInfo)
-	innerW := w - 6
-	padLen := innerW - leftLen - rightLen
-	if padLen > 0 {
-		barContent += strings.Repeat(" ", padLen) + rightInfo
-	} else if innerW > leftLen {
-		barContent += "  " + rightInfo
+	// Footer: "Mini Wiki • model" left, file path right, top border
+	footerLeft := fmt.Sprintf("Mini Wiki • %s", a.models.Active())
+	footerRight := a.scanCfg.RootDir
+	if footerRight == "" {
+		footerRight, _ = os.Getwd()
 	}
-	bottomBar := bottomBarStyle.Width(w - 2).Render(barContent)
+	// Lay out left and right within footer width (accounting for border + padding)
+	footerLeftLen := lipgloss.Width(footerLeft)
+	footerRightLen := lipgloss.Width(footerRight)
+	footerInnerW := w - 6 // border(2) + padding(4)
+	footerPad := footerInnerW - footerLeftLen - footerRightLen
+	var footerContent string
+	if footerPad > 0 {
+		footerContent = footerLeft + strings.Repeat(" ", footerPad) + footerRight
+	} else {
+		footerContent = footerLeft + "  " + footerRight
+	}
+	footer := footerStyle.Width(w - 2).Render(footerContent)
 
 	// Layout: header(2) + sub(2) + panels(panelH-2) + overlay(0/1) + \n(1) + input(3) + \n(1) + bar(1) = h
 	//   = 4 + panelH - 2 + overlay + 1 + 3 + 1 + 1 = panelH + 8 + overlay
@@ -1726,7 +1710,7 @@ func (a *Application) View() string {
 	b.WriteString("\n")
 	b.WriteString(inputRendered)
 	b.WriteString("\n")
-	b.WriteString(bottomBar)
+	b.WriteString(footer)
 
 	return b.String()
 }
@@ -1788,63 +1772,23 @@ func (a *Application) renderChatPanel(width, totalHeight int) string {
 func (a *Application) renderInfoPanel(width int) string {
 	var content strings.Builder
 
-	content.WriteString(panelHeaderStyle.Render("SESSION"))
+	// Session header
+	content.WriteString(panelHeaderStyle.Render("Session"))
 	content.WriteString("\n")
-	content.WriteString(fmt.Sprintf("  %s %s\n", infoLabelStyle.Render("M:"), infoValueStyle.Render(a.models.Active())))
-	chain := a.models.ActiveChain()
-	if len(chain) > 1 {
-		content.WriteString(fmt.Sprintf("  %s %s\n", infoLabelStyle.Render("F:"), infoValueStyle.Render(chain[1])))
-	}
-	ctxPct := "0%"
+
+	// Context sub-header
+	content.WriteString(fmt.Sprintf("  %s\n", panelValueStyle.Render("Context")))
+	content.WriteString("\n")
+
+	// Tokens and percentage (muted colors)
+	tokStr := fmt.Sprintf("%d tokens", a.estimatedTokens)
+	ctxPct := "0% used"
 	if a.thread != nil && a.thread.MaxTokens > 0 {
 		pct := a.thread.EstimatedTokens() * 100 / a.thread.MaxTokens
-		ctxPct = fmt.Sprintf("%d%%", pct)
+		ctxPct = fmt.Sprintf("%d%% used", pct)
 	}
-	content.WriteString(fmt.Sprintf("  %s %s\n", infoLabelStyle.Render("Ctx:"), infoValueStyle.Render(ctxPct)))
-	content.WriteString(fmt.Sprintf("  %s %s\n", infoLabelStyle.Render("Tok:"), infoValueStyle.Render(fmt.Sprintf("%d", a.estimatedTokens))))
-
-	content.WriteString("\n")
-	content.WriteString(panelHeaderStyle.Render("TASKS"))
-	content.WriteString("\n")
-	if len(a.tasks) == 0 {
-		content.WriteString("  none\n")
-	} else {
-		maxShow := 4
-		for i, t := range a.tasks {
-			if i >= maxShow {
-				break
-			}
-			mark := " "
-			if t.done {
-				mark = "x"
-			}
-			label := t.text
-			if len(label) > width-6 {
-				label = label[:width-9] + "..."
-			}
-			content.WriteString(fmt.Sprintf("  [%s] %s\n", mark, label))
-		}
-	}
-
-	content.WriteString("\n")
-	content.WriteString(panelHeaderStyle.Render("HX"))
-	content.WriteString("\n")
-	if len(a.actionHistory) == 0 {
-		content.WriteString("  none\n")
-	} else {
-		maxShow := 4
-		start := 0
-		if len(a.actionHistory) > maxShow {
-			start = len(a.actionHistory) - maxShow
-		}
-		for _, act := range a.actionHistory[start:] {
-			label := act
-			if len(label) > width-4 {
-				label = label[:width-7] + "..."
-			}
-			content.WriteString(fmt.Sprintf("  %s\n", label))
-		}
-	}
+	content.WriteString(fmt.Sprintf("  %s\n", panelLabelStyle.Render(tokStr)))
+	content.WriteString(fmt.Sprintf("  %s\n", panelLabelStyle.Render(ctxPct)))
 
 	return content.String()
 }
@@ -2906,12 +2850,15 @@ func (a *Application) updateSuggestions() {
 		return
 	}
 
-	// If typing /, suggest commands
-	if strings.HasPrefix(val, "/") {
+	// If typing /, suggest commands (auto-select first)
+	if strings.HasPrefix(val, "/") && len(val) > 1 {
 		for _, cmd := range commandList {
 			if strings.HasPrefix(cmd.text, val) {
 				a.suggestions = append(a.suggestions, cmd)
 			}
+		}
+		if len(a.suggestions) > 0 {
+			a.tabIndex = 0 // auto-select first
 		}
 		return
 	}
@@ -3123,19 +3070,27 @@ func formatSuggestions(suggestions []suggestionItem, selected int) string {
 	if len(suggestions) == 0 {
 		return ""
 	}
+	selStyle := lipgloss.NewStyle().
+			Background(lipgloss.Color("#283457")).
+			Foreground(lipgloss.Color("#c0caf5")).
+			Padding(0, 1)
+	normalStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#565f89")).
+			Padding(0, 1)
+
 	var b strings.Builder
 	for i, s := range suggestions {
-		if i > 0 {
-			b.WriteString(" | ")
-		}
-		marker := "  "
-		if i == selected {
-			marker = ">"
-		}
+		line := s.text
 		if s.description != "" {
-			b.WriteString(fmt.Sprintf("%s %s - %s", marker, s.text, s.description))
+			line = s.text + " — " + s.description
+		}
+		if i == selected {
+			b.WriteString(selStyle.Render(line))
 		} else {
-			b.WriteString(fmt.Sprintf("%s %s", marker, s.text))
+			b.WriteString(normalStyle.Render(line))
+		}
+		if i < len(suggestions)-1 {
+			b.WriteString("\n")
 		}
 	}
 	return b.String()
