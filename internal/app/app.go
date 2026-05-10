@@ -204,8 +204,6 @@ var (
 	tokyoPurple   = lipgloss.Color("#bb9af7")
 	tokyoRed      = lipgloss.Color("#f7768e")
 	tokyoYellow   = lipgloss.Color("#e0af68")
-	tokyoLineHighlight = lipgloss.Color("#292e42")
-	tokyoSelection = lipgloss.Color("#283457")
 
 	titleStyle = lipgloss.NewStyle().
 			Bold(true).
@@ -216,39 +214,21 @@ var (
 			Foreground(tokyoComment).
 			Padding(0, 1)
 
-	// Thick left border (2-char wide block)
-	thickLeft = lipgloss.Border{
-		Top: " ", Bottom: " ", Left: "█", Right: " ",
-		TopLeft: " ", TopRight: " ", BottomLeft: " ", BottomRight: " ",
-	}
-
-	// User message: dark bg, thick green left border, generous padding
 	userMsgStyle = lipgloss.NewStyle().
 			Foreground(tokyoGreen).
-			Background(tokyoLineHighlight).
-			Padding(1, 2).
-			PaddingLeft(3).
-			Border(thickLeft, false, false, true, false).
-			BorderForeground(tokyoGreen)
+			Background(tokyoSurface).
+			Padding(0, 2)
 
-	// Assistant header: lighter bg, thick blue left border
 	assistantHeaderStyle = lipgloss.NewStyle().
 				Foreground(tokyoBlue).
 				Bold(true).
 				Background(tokyoOverlay).
-				Padding(1, 2).
-				PaddingLeft(3).
-				Border(thickLeft, false, false, true, false).
-				BorderForeground(tokyoBlue)
+				Padding(0, 2)
 
-	// Assistant content: lighter bg, thick blue left border
 	assistantMsgStyle = lipgloss.NewStyle().
 				Foreground(tokyoFg).
 				Background(tokyoOverlay).
-				Padding(1, 2).
-				PaddingLeft(3).
-				Border(thickLeft, false, false, true, false).
-				BorderForeground(tokyoBlue)
+				Padding(0, 2)
 
 	errorStyle = lipgloss.NewStyle().
 			Foreground(tokyoRed)
@@ -289,9 +269,7 @@ var (
 	headerStyle = lipgloss.NewStyle().
 			Foreground(tokyoFg).
 			Bold(true).
-			Padding(0, 2).
-			Border(lipgloss.NormalBorder(), false, true, false, false).
-			BorderForeground(tokyoBorder)
+			Padding(0, 2)
 
 	subHeaderStyle = lipgloss.NewStyle().
 			Foreground(tokyoComment).
@@ -1065,9 +1043,8 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.streamCancel = msg.CancelCtx
 		a.statusMsg = fmt.Sprintf("Receiving from %s...", a.streamModel)
 
-		// Add spacing before assistant message
+		// Add assistant header only on first attempt, not on fallback retry
 		if !a.retrying {
-			a.appendToViewport("\n\n")
 			a.appendToViewport(assistantHeaderStyle.Render(fmt.Sprintf("%s:", a.streamModel)))
 		} else {
 			a.retrying = false
@@ -1636,28 +1613,25 @@ func (a *Application) View() string {
 		errText = "  ! " + a.pongMsg
 	}
 
-	// --- Centered header: "Mini Wiki | Project" ---
+	// Project dir for header (centered)
 	projDir := ""
 	if a.pkb != nil {
 		projDir = a.pkb.ProjectDir()
 	}
-	headerTitle := "Mini Wiki"
-	if projDir != "" {
-		parts := strings.Split(projDir, "/")
-		projectName := parts[len(parts)-1]
-		if projectName == "" && len(parts) > 1 {
-			projectName = parts[len(parts)-2]
+	shortDir := projDir
+	if len(shortDir) > 40 {
+		parts := strings.Split(shortDir, "/")
+		if len(parts) > 3 {
+			shortDir = parts[len(parts)-3] + "/" + parts[len(parts)-2] + "/" + parts[len(parts)-1]
 		}
-		headerTitle = "Mini Wiki | " + projectName
 	}
-	if len(headerTitle) > w-4 {
-		headerTitle = headerTitle[:w-7] + "..."
+
+	// --- Centered project path header ---
+	padding := (w - len(shortDir)) / 2
+	if padding < 0 {
+		padding = 0
 	}
-	hPad := (w - len(headerTitle)) / 2
-	if hPad < 0 {
-		hPad = 0
-	}
-	headerLine := headerStyle.Render(strings.Repeat(" ", hPad) + headerTitle)
+	headerLine := headerStyle.Render(strings.Repeat(" ", padding) + shortDir)
 
 	// --- Status sub-header ---
 	subLine := ""
@@ -1912,7 +1886,7 @@ func (a *Application) appendLine(content string) {
 // highlightSelection modifies the viewport content to show visible
 // highlighting on the lines being selected by the user's mouse drag.
 func formatUserMsg(content string) string {
-	return "\n\n" + userMsgStyle.Render("You: " + content) + "\n"
+	return "\n" + userMsgStyle.Render("You: " + content) + "\n"
 }
 
 // formatAssistantMsg formats the assistant's response header with the model name.
