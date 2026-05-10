@@ -242,9 +242,16 @@ var (
 	helpStyle = lipgloss.NewStyle().
 			Foreground(tokyoComment)
 
-	suggestionStyle = lipgloss.NewStyle().
-			Foreground(tokyoFg).
-			Background(tokyoOverlay).
+	suggestionBox = lipgloss.NewStyle().
+			Background(lipgloss.Color("#1F2937")).
+			Padding(0, 1)
+
+	suggestionNormal = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#565f89"))
+
+	suggestionSelected = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#c0caf5")).
+			Background(lipgloss.Color("#283457")).
 			Padding(0, 1)
 
 	hintStyle = lipgloss.NewStyle().
@@ -1646,7 +1653,7 @@ func (a *Application) View() string {
 	suggestionText := ""
 	if len(a.suggestions) > 0 {
 		overlayLines = 1
-		suggestionText = suggestionStyle.Render(formatSuggestions(a.suggestions, a.tabIndex))
+		suggestionText = suggestionBox.Render(formatSuggestions(a.suggestions, a.tabIndex))
 	}
 
 	// Bottom bar: model name left, token info right, with border
@@ -2906,12 +2913,15 @@ func (a *Application) updateSuggestions() {
 		return
 	}
 
-	// If typing /, suggest commands
-	if strings.HasPrefix(val, "/") {
+	// If typing /, suggest commands (auto-select first)
+	if strings.HasPrefix(val, "/") && len(val) > 1 {
 		for _, cmd := range commandList {
 			if strings.HasPrefix(cmd.text, val) {
 				a.suggestions = append(a.suggestions, cmd)
 			}
+		}
+		if len(a.suggestions) > 0 {
+			a.tabIndex = 0
 		}
 		return
 	}
@@ -3119,23 +3129,23 @@ func (a *Application) clearSuggestions() {
 	a.tabIndex = -1
 }
 
-func formatSuggestions(suggestions []suggestionItem, selected int) string {
-	if len(suggestions) == 0 {
+func formatSuggestions(items []suggestionItem, selected int) string {
+	if len(items) == 0 {
 		return ""
 	}
 	var b strings.Builder
-	for i, s := range suggestions {
-		if i > 0 {
-			b.WriteString(" | ")
-		}
-		marker := "  "
-		if i == selected {
-			marker = ">"
-		}
+	for i, s := range items {
+		line := " " + s.text
 		if s.description != "" {
-			b.WriteString(fmt.Sprintf("%s %s - %s", marker, s.text, s.description))
+			line += "  " + s.description
+		}
+		if i == selected {
+			b.WriteString(suggestionSelected.Render(line))
 		} else {
-			b.WriteString(fmt.Sprintf("%s %s", marker, s.text))
+			b.WriteString(suggestionNormal.Render(line))
+		}
+		if i < len(items)-1 {
+			b.WriteString("\n")
 		}
 	}
 	return b.String()
