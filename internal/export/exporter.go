@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -124,6 +125,8 @@ func (e *exporter) Export(ctx context.Context, data *ExportData, cfg ExportConfi
 		result, err = e.exportJSON(ctx, data, cfg)
 	case "md", "markdown":
 		result, err = e.exportMarkdown(ctx, data, cfg)
+	case "ods":
+		result, err = e.exportODS(ctx, data, cfg)
 	default:
 		result, err = e.exportXLSX(ctx, data, cfg)
 	}
@@ -246,6 +249,63 @@ func (e *exporter) exportXLSX(ctx context.Context, data *ExportData, cfg ExportC
 		Path:     outputPath,
 		FileName: fileName,
 		Size:     int64(buf.Len()),
+		Sheets:   1,
+		Rows:     len(data.Rows),
+		Duration: time.Since(start),
+	}, nil
+}
+
+// exportODS exports to OpenDocument Spreadsheet (.ods) format.
+// Uses LibreOffice headless to convert from xlsx, giving perfect
+// formatting fidelity. Falls back to saving as .xlsx if LibreOffice
+// is not available.
+func (e *exporter) exportODS(ctx context.Context, data *ExportData, cfg ExportConfig) (*ExportResult, error) {
+	// First export as xlsx to a temp file
+	tmpXLSX := GenerateFileName("tmp_export", "xlsx")
+	xlsxCfg := cfg
+	xlsxCfg.Format = "xlsx"
+	xlsxCfg.FileName = tmpXLSX
+	xlsxResult, err := e.exportXLSX(ctx, data, xlsxCfg)
+	if err != nil {
+		return nil, err
+	}
+
+	start := time.Now()
+
+	// Try converting to ods via LibreOffice headless
+	odsName := cfg.FileName
+	if odsName == "" {
+		odsName = GenerateFileName("export", "ods")
+	}
+	if filepath.Ext(odsName) == "" {
+		odsName += ".ods"
+	}
+	odsPath := filepath.Join(cfg.OutputDir, odsName)
+
+	cmd := exec.Command("libreoffice", "--headless", "--convert-to", "ods",
+		"--outdir", cfg.OutputDir, xlsxResult.Path)
+	cmd.Stderr = nil
+	cmd.Stdout = nil
+
+	if err := cmd.Run(); err != nil {
+		// LibreOffice not available: return the xlsx with a note
+		xlsxResult.Format = "xlsx (ods unavailable — install libreoffice)"
+		return xlsxResult, nil
+	}
+
+	// Clean up the intermediate xlsx
+	os.Remove(xlsxResult.Path)
+
+	fi, err := os.Stat(odsPath)
+	size := int64(0)
+	if err == nil {
+		size = fi.Size()
+	}
+
+	return &ExportResult{
+		Path:     odsPath,
+		FileName: odsName,
+		Size:     size,
 		Sheets:   1,
 		Rows:     len(data.Rows),
 		Duration: time.Since(start),
