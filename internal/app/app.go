@@ -33,7 +33,7 @@ import (
 	"mini-wiki/internal/webfetch"
 
 	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -191,7 +191,7 @@ type suggestionItem struct {
 
 var (
 	// Core palette
-	tokyoBg       = lipgloss.Color("#24283b")
+	tokyoBg       = lipgloss.Color("#0d1117")
 	tokyoSurface  = lipgloss.Color("#1f2335")
 	tokyoOverlay  = lipgloss.Color("#24283b")
 	tokyoFg       = lipgloss.Color("#c0caf5")
@@ -326,7 +326,7 @@ type Application struct {
 	showInfoPanel bool // false = hidden, full width for chat
 
 	// UI components
-	input    textinput.Model
+	input    textarea.Model
 	viewport viewport.Model
 	spinner  spinner.Model
 
@@ -371,11 +371,19 @@ type Application struct {
 // New creates a new Application with initialized components.
 // ragWorkerDir is the directory containing the extracted Python RAG worker (empty if unavailable).
 func New(cfg *config.Manager, client ollama.Client, mm *modelmgr.Manager, ragWorkerDir string) *Application {
-	ti := textinput.New()
+	ti := textarea.New()
 	ti.Placeholder = "Type a message... (/help for commands)"
 	ti.Focus()
 	ti.CharLimit = 4096
-	ti.Width = 80
+	ti.SetWidth(80)
+	ti.MaxHeight = 8
+	ti.ShowLineNumbers = false
+	// Map Enter to submit (handled by Update loop), Shift+Enter = newline
+	ti.KeyMap.InsertNewline.SetEnabled(false)
+	ti.KeyMap.InsertNewline.SetKeys("shift+enter")
+	ti.KeyMap.InsertNewline.SetEnabled(true)
+	ti.KeyMap.InputEnd.SetKeys("ctrl+e")
+	ti.KeyMap.InputBegin.SetKeys("ctrl+a")
 
 	s := spinner.New()
 	s.Style = lipgloss.NewStyle().Foreground(tokyoPurple)
@@ -477,7 +485,7 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.viewport = viewport.New(msg.Width-2, msg.Height-8)
 			a.viewport.YPosition = 4
 			a.viewport.Style = lipgloss.NewStyle().Padding(1)
-			a.input.Width = msg.Width - 4
+			a.input.SetWidth(msg.Width - 4)
 			a.ready = true
 			return a, tea.Batch(
 				refreshModelsCmd(a.client, a.models),
@@ -487,7 +495,7 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		a.viewport.Width = msg.Width - 2
 		a.viewport.Height = msg.Height - 8
-		a.input.Width = msg.Width - 4
+		a.input.SetWidth(msg.Width - 4)
 		return a, nil
 
 	// --- Ping result ---
@@ -1707,10 +1715,8 @@ func (a *Application) View() string {
 		inputContent := fmt.Sprintf(" %s %s", a.spinner.View(), a.statusMsg)
 		inputRendered = inputBoxStyle.Width(w - 2).Render(inputContent)
 	} else {
+		a.input.SetWidth(w - 6)
 		inputLine := a.input.View()
-		if len(inputLine) > w-6 {
-			inputLine = inputLine[:w-6]
-		}
 		inputRendered = inputBoxStyle.Width(w - 2).Render(inputLine)
 	}
 
