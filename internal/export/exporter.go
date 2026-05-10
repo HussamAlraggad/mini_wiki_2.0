@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -150,10 +151,25 @@ func (e *exporter) exportXLSX(ctx context.Context, data *ExportData, cfg ExportC
 		f.SetSheetName("Sheet1", sheetName)
 	}
 
+	// Create a top-aligned style for all data cells.
+	topStyle, _ := f.NewStyle(&excelize.Style{
+		Alignment: &excelize.Alignment{
+			Vertical: "top",
+		},
+	})
+
+	// Header row style (bold)
+	headerStyle, _ := f.NewStyle(&excelize.Style{
+		Font: &excelize.Font{
+			Bold: true,
+		},
+	})
+
 	// Header
 	for j, col := range data.Columns {
 		cell, _ := excelize.CoordinatesToCellName(j+1, 1)
 		f.SetCellValue(sheetName, cell, col.Name)
+		f.SetCellStyle(sheetName, cell, cell, headerStyle)
 	}
 
 	// Data rows
@@ -163,29 +179,50 @@ func (e *exporter) exportXLSX(ctx context.Context, data *ExportData, cfg ExportC
 			return nil, ctx.Err()
 		default:
 		}
-		for j := range row {
+		for j, rawVal := range row {
 			if j >= len(data.Columns) {
 				break
 			}
 			cell, _ := excelize.CoordinatesToCellName(j+1, i+2)
-			f.SetCellValue(sheetName, cell, sanitizeCell(row[j]))
+			val := sanitizeCell(rawVal)
+			colType := data.Columns[j].Type
+			switch colType {
+			case "number":
+				if n, err := strconv.ParseFloat(val, 64); err == nil {
+					f.SetCellFloat(sheetName, cell, n, 2, 64)
+				} else {
+					f.SetCellStr(sheetName, cell, val)
+				}
+			default:
+				f.SetCellStr(sheetName, cell, val)
+			}
+			f.SetCellStyle(sheetName, cell, cell, topStyle)
 		}
 	}
 
-	// Auto-width
+	// Auto-width based on actual data content
 	for j, col := range data.Columns {
 		width := col.Width
 		if width <= 0 {
-			width = len(col.Name) + 2
+			// Find max content width across header + all rows
+			maxLen := len(col.Name) + 2
+			for _, row := range data.Rows {
+				if j < len(row) && len(row[j]) > maxLen {
+					maxLen = len(row[j])
+				}
+			}
+			width = maxLen
 			if width < 10 {
 				width = 10
 			}
-			if width > 50 {
-				width = 50
+			if width > 80 {
+				width = 80
 			}
 		}
-		colLetter := string(rune('A' + j))
-		f.SetColWidth(sheetName, colLetter, colLetter, float64(width))
+		colName, err := excelize.ColumnNumberToName(j + 1)
+		if err == nil {
+			f.SetColWidth(sheetName, colName, colName, float64(width))
+		}
 	}
 
 	fileName := cfg.FileName
