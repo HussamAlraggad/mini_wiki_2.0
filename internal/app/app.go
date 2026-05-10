@@ -204,6 +204,8 @@ var (
 	tokyoPurple   = lipgloss.Color("#bb9af7")
 	tokyoRed      = lipgloss.Color("#f7768e")
 	tokyoYellow   = lipgloss.Color("#e0af68")
+	tokyoLineHighlight = lipgloss.Color("#292e42")
+	tokyoSelection = lipgloss.Color("#283457")
 
 	titleStyle = lipgloss.NewStyle().
 			Bold(true).
@@ -214,21 +216,33 @@ var (
 			Foreground(tokyoComment).
 			Padding(0, 1)
 
-	userMsgStyle = lipgloss.NewStyle().
-			Foreground(tokyoGreen).
-			Background(tokyoSurface).
-			Padding(0, 2)
-
 	assistantHeaderStyle = lipgloss.NewStyle().
 				Foreground(tokyoBlue).
 				Bold(true).
 				Background(tokyoOverlay).
 				Padding(0, 2)
 
+	// Thick left border definitions (user=green, assistant=blue, input=purple)
+	thickLeft = lipgloss.Border{
+		Top: " ", Bottom: " ", Left: "█", Right: " ",
+		TopLeft: " ", TopRight: " ", BottomLeft: " ", BottomRight: " ",
+	}
+
 	assistantMsgStyle = lipgloss.NewStyle().
 				Foreground(tokyoFg).
 				Background(tokyoOverlay).
-				Padding(0, 2)
+				Padding(0, 1).
+				PaddingLeft(2).
+				Border(thickLeft, false, false, true, false).
+				BorderForeground(tokyoBlue)
+
+	userMsgStyle = lipgloss.NewStyle().
+			Foreground(tokyoGreen).
+			Background(tokyoLineHighlight).
+			Padding(0, 1).
+			PaddingLeft(2).
+			Border(thickLeft, false, false, true, false).
+			BorderForeground(tokyoGreen)
 
 	errorStyle = lipgloss.NewStyle().
 			Foreground(tokyoRed)
@@ -258,25 +272,26 @@ var (
 			Foreground(tokyoComment).
 			Padding(0, 1)
 
-	bottomBarStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
+	footerStyle = lipgloss.NewStyle().
+			Border(lipgloss.NormalBorder(), true, false, false, false).
 			BorderForeground(tokyoBorder).
-			Padding(0, 1)
+			Padding(0, 2)
 
-	bottomRightStyle = lipgloss.NewStyle().
-			Foreground(tokyoComment).
-			Padding(0, 1)
-
-	// Input box with subtle border
 	inputBoxStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
+			Background(tokyoLineHighlight).
+			Border(lipgloss.NormalBorder(), true, false, true, false).
 			BorderForeground(tokyoBorder).
-			Padding(0, 1)
+			Padding(0, 1).
+			PaddingLeft(2).
+			Border(thickLeft, false, false, true, false).
+			BorderForeground(tokyoPurple)
 
 	headerStyle = lipgloss.NewStyle().
 			Foreground(tokyoFg).
 			Bold(true).
-			Padding(0, 2)
+			Padding(0, 2).
+			Border(lipgloss.NormalBorder(), false, true, false, false).
+			BorderForeground(tokyoBorder)
 
 	subHeaderStyle = lipgloss.NewStyle().
 			Foreground(tokyoComment).
@@ -288,11 +303,9 @@ var (
 
 	panelRightStyle = lipgloss.NewStyle().
 			Background(tokyoSurface).
-			Padding(1, 2)
-
-	panelFocusStyle = lipgloss.NewStyle().
-			Background(tokyoOverlay).
-			Padding(1, 2)
+			Padding(1, 2).
+			Border(lipgloss.NormalBorder(), false, false, true, false).
+			BorderForeground(tokyoBorder)
 
 	panelHeaderStyle = lipgloss.NewStyle().
 			Bold(true).
@@ -1656,23 +1669,22 @@ func (a *Application) View() string {
 		suggestionText = suggestionBox.Render(formatSuggestions(a.suggestions, a.tabIndex))
 	}
 
-	// Bottom bar: model name left, token info right, with border
-	leftInfo := fmt.Sprintf(" %s ", a.models.Active())
-	rightInfo := fmt.Sprintf(" tokens: %d  |  models: %d ", a.estimatedTokens, len(a.models.Available()))
-
-	// Lay out left and right within available width
-	// Inner area = (w - 2) - 2 (border) - 2 (padding) = w - 6
-	barContent := leftInfo
-	rightLen := lipgloss.Width(rightInfo)
-	leftLen := lipgloss.Width(leftInfo)
-	innerW := w - 6
-	padLen := innerW - leftLen - rightLen
-	if padLen > 0 {
-		barContent += strings.Repeat(" ", padLen) + rightInfo
-	} else if innerW > leftLen {
-		barContent += "  " + rightInfo
+	// Footer: "Mini Wiki • model" left, file path right, with border
+	footerLeft := fmt.Sprintf("Mini Wiki • %s", a.models.Active())
+	footerRight := a.scanCfg.RootDir
+	if footerRight == "" {
+		footerRight, _ = os.Getwd()
 	}
-	bottomBar := bottomBarStyle.Width(w - 2).Render(barContent)
+	footerLeftLen := lipgloss.Width(footerLeft)
+	footerRightLen := lipgloss.Width(footerRight)
+	padLen := (w - 6) - footerLeftLen - footerRightLen
+	var footerContent string
+	if padLen > 0 {
+		footerContent = footerLeft + strings.Repeat(" ", padLen) + footerRight
+	} else {
+		footerContent = footerLeft + "  " + footerRight
+	}
+	footer := footerStyle.Width(w - 2).Render(footerContent)
 
 	// Layout: header(2) + sub(2) + panels(panelH-2) + overlay(0/1) + \n(1) + input(3) + \n(1) + bar(1) = h
 	//   = 4 + panelH - 2 + overlay + 1 + 3 + 1 + 1 = panelH + 8 + overlay
@@ -1733,7 +1745,7 @@ func (a *Application) View() string {
 	b.WriteString("\n")
 	b.WriteString(inputRendered)
 	b.WriteString("\n")
-	b.WriteString(bottomBar)
+	b.WriteString(footer)
 
 	return b.String()
 }
@@ -1791,67 +1803,24 @@ func (a *Application) renderChatPanel(width, totalHeight int) string {
 	return content.String()
 }
 
-// renderInfoPanel builds the right panel (session, model, tasks, history).
+// renderInfoPanel builds the right panel (Session info).
 func (a *Application) renderInfoPanel(width int) string {
 	var content strings.Builder
 
-	content.WriteString(panelHeaderStyle.Render("SESSION"))
-	content.WriteString("\n")
-	content.WriteString(fmt.Sprintf("  %s %s\n", infoLabelStyle.Render("M:"), infoValueStyle.Render(a.models.Active())))
-	chain := a.models.ActiveChain()
-	if len(chain) > 1 {
-		content.WriteString(fmt.Sprintf("  %s %s\n", infoLabelStyle.Render("F:"), infoValueStyle.Render(chain[1])))
-	}
-	ctxPct := "0%"
+	content.WriteString(panelHeaderStyle.Render("Session"))
+	content.WriteString("\n\n")
+
+	// Context info
+	content.WriteString(fmt.Sprintf("  %s\n", "Context"))
+
+	tokStr := fmt.Sprintf("%d tokens", a.estimatedTokens)
+	ctxPct := "0% used"
 	if a.thread != nil && a.thread.MaxTokens > 0 {
 		pct := a.thread.EstimatedTokens() * 100 / a.thread.MaxTokens
-		ctxPct = fmt.Sprintf("%d%%", pct)
+		ctxPct = fmt.Sprintf("%d%% used", pct)
 	}
-	content.WriteString(fmt.Sprintf("  %s %s\n", infoLabelStyle.Render("Ctx:"), infoValueStyle.Render(ctxPct)))
-	content.WriteString(fmt.Sprintf("  %s %s\n", infoLabelStyle.Render("Tok:"), infoValueStyle.Render(fmt.Sprintf("%d", a.estimatedTokens))))
-
-	content.WriteString("\n")
-	content.WriteString(panelHeaderStyle.Render("TASKS"))
-	content.WriteString("\n")
-	if len(a.tasks) == 0 {
-		content.WriteString("  none\n")
-	} else {
-		maxShow := 4
-		for i, t := range a.tasks {
-			if i >= maxShow {
-				break
-			}
-			mark := " "
-			if t.done {
-				mark = "x"
-			}
-			label := t.text
-			if len(label) > width-6 {
-				label = label[:width-9] + "..."
-			}
-			content.WriteString(fmt.Sprintf("  [%s] %s\n", mark, label))
-		}
-	}
-
-	content.WriteString("\n")
-	content.WriteString(panelHeaderStyle.Render("HX"))
-	content.WriteString("\n")
-	if len(a.actionHistory) == 0 {
-		content.WriteString("  none\n")
-	} else {
-		maxShow := 4
-		start := 0
-		if len(a.actionHistory) > maxShow {
-			start = len(a.actionHistory) - maxShow
-		}
-		for _, act := range a.actionHistory[start:] {
-			label := act
-			if len(label) > width-4 {
-				label = label[:width-7] + "..."
-			}
-			content.WriteString(fmt.Sprintf("  %s\n", label))
-		}
-	}
+	content.WriteString(fmt.Sprintf("  %s\n", tokStr))
+	content.WriteString(fmt.Sprintf("  %s\n", ctxPct))
 
 	return content.String()
 }
