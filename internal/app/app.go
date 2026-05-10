@@ -191,7 +191,7 @@ type suggestionItem struct {
 
 var (
 	// Core palette
-	tokyoBg       = lipgloss.Color("#0d1117")
+	tokyoBg       = lipgloss.Color("#1a1b26")
 	tokyoSurface  = lipgloss.Color("#1f2335")
 	tokyoOverlay  = lipgloss.Color("#24283b")
 	tokyoFg       = lipgloss.Color("#c0caf5")
@@ -1700,10 +1700,17 @@ func (a *Application) View() string {
 	}
 	bottomBar := bottomBarStyle.Width(w - 2).Render(barContent)
 
-	// Layout: header(2) + sub(2) + panels(panelH-2) + overlay(0/1) + \n(1) + input(3) + \n(1) + bar(1) = h
-	//   = 4 + panelH - 2 + overlay + 1 + 3 + 1 + 1 = panelH + 8 + overlay
-	//   panelH = h - 8 - overlayLines
-	panelH := h - 8 - overlayLines
+	// Layout with auto-expanding textarea:
+	// header(2) + \n(1) + sub(1) + \n(1) + panels(panelH) + \n(1) + input(inputH) + \n(1) + bar(1) = h
+	// panelH = h - 2 - 1 - 1 - 1 - 1 - inputH - 1 - 1 = h - inputH - 8
+	inputH := lipgloss.Height(a.input.View())
+	if inputH < 1 {
+		inputH = 1
+	}
+	if inputH > 8 {
+		inputH = 8
+	}
+	panelH := h - inputH - 8 - overlayLines
 	if panelH < 3 {
 		panelH = 3
 	}
