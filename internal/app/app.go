@@ -1934,9 +1934,9 @@ func streamChatCmd(client ollama.Client, mm *modelmgr.Manager, thread *conversat
 				},
 			}
 
-			// Context with 5min timeout. Cancel is passed to the reader
+			// Context with 30min timeout. Cancel is passed to the reader
 			// via StreamStarted.CancelCtx and called when the stream completes.
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 
 			stream, err := client.ChatStream(ctx, req)
 			if err != nil {
