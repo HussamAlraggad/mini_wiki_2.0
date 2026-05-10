@@ -191,7 +191,7 @@ type suggestionItem struct {
 
 var (
 	// Core palette
-	tokyoBg       = lipgloss.Color("#1a1b26")
+	tokyoBg       = lipgloss.Color("#1e2030")
 	tokyoSurface  = lipgloss.Color("#1f2335")
 	tokyoOverlay  = lipgloss.Color("#24283b")
 	tokyoFg       = lipgloss.Color("#c0caf5")
