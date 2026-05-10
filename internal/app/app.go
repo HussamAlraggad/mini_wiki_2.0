@@ -191,7 +191,7 @@ type suggestionItem struct {
 
 var (
 	// Core palette
-	tokyoBg       = lipgloss.Color("#1e2030")
+	tokyoBg       = lipgloss.Color("#24283b")
 	tokyoSurface  = lipgloss.Color("#1f2335")
 	tokyoOverlay  = lipgloss.Color("#24283b")
 	tokyoFg       = lipgloss.Color("#c0caf5")
@@ -1248,9 +1248,11 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.updateSuggestions()
 		return a, cmd
 
-	// --- Mouse events (scrolling only) ---
+	// --- Mouse events (wheel only — leave clicks for native selection) ---
 	case tea.MouseMsg:
-		a.viewport, _ = a.viewport.Update(msg)
+		if msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown {
+			a.viewport, _ = a.viewport.Update(msg)
+		}
 		return a, nil
 
 	// --- Task messages ---
