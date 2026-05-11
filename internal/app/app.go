@@ -69,6 +69,13 @@ type (
 	ModelsFailed    struct{ Err error }
 	PingComplete    struct{ OK bool }
 
+	// Agentic Query result (async, from goroutine)
+	DataAnalysisResult struct {
+		Answer   string
+		Question string
+		Error    string
+	}
+
 	// Phase 2: File system & ingestion
 	ScanRequested    struct{}
 	ScanComplete     struct {
@@ -383,6 +390,12 @@ type Application struct {
 	showWelcome    bool // show welcome logo when chat is empty
 	busy           bool // true when a background operation is running
 
+	// Pending agentic query (async)
+	pendingAgentic struct {
+		question string
+		ragCtx   []rag.Source
+	}
+
 	// Tasks / todo
 	tasks         []taskItem
 	actionHistory []string
@@ -613,56 +626,72 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			})
 		}()
 
-	// Agentic Query + Auto-RAG: try to answer from data first, then enrich with RAG context.
-	// Agentic: send schema + question to coder LLM, generate Pandas query, execute locally.
-	// This works immediately without /embed, for any structured dataset question.
-	agenticAnswer := ""
-	if a.pkb != nil {
-		if projectDir := a.pkb.ProjectDir(); projectDir != "" {
-			if ds, err := ranking.LoadDataset(projectDir); err == nil && ds.SourceFile != "" {
-				if errMsg := a.ensureRAGStarted(); errMsg == "" {
-					if resp, err := a.ragClient.QueryAgentic(ds.SourceFile, content, "qwen2.5-coder:7b"); err == nil && resp.Type == "query_answer" {
-						agenticAnswer = resp.Answer
-					}
-				}
-			}
-		}
-	}
-	if agenticAnswer != "" {
-		content = fmt.Sprintf("[Data analysis result: %s]\n\nUser question: %s", agenticAnswer, content)
-	}
-
-	// Auto-RAG: search the vector database for relevant context (embedding optional)
-	ragResult, _ := a.queryRAG(content, 3)
-	if ragResult != nil && len(ragResult.Sources) > 0 {
-		var ragParts []string
-		ragParts = append(ragParts, "\n[Context from knowledge base:]")
-		for _, src := range ragResult.Sources {
-			ragParts = append(ragParts, fmt.Sprintf("Source %s (relevance: %.2f):", src.File, src.Score))
-			ragParts = append(ragParts, src.Text)
-		}
-		content = strings.Join(ragParts, "\n") + "\n\nUser question: " + content
-	}
-
-	// Compact thread if context window is getting full
-	a.compactThreadIfNeeded()
-
-	// Add user message to thread
-	a.thread.Add(conversation.Message{
-		Role:    conversation.RoleUser,
-		Content: content,
-	})
-	a.updateTokenCount()
-
 	// Render user message in viewport (original text, not RAG-injected)
 	a.appendLine(formatUserMsg(originalContent))
 
-	// Clear input and start streaming
+	// Do RAG search (fast, synchronous)
+	ragResult, _ := a.queryRAG(content, 3)
+	a.pendingAgentic.ragCtx = nil
+	if ragResult != nil {
+		a.pendingAgentic.ragCtx = ragResult.Sources
+	}
+
+	// Clear input immediately
 	a.input.SetValue("")
 	a.errMsg = ""
-	a.statusMsg = fmt.Sprintf("Thinking (%s)...", a.models.Active())
 
-	return a, streamChatCmd(a.client, a.models, a.thread)
+	// Try Agentic Query in background (non-blocking) — if it works, results get
+	// injected before the LLM streams. If it fails or no dataset, stream directly.
+	a.pendingAgentic.question = content
+	a.statusMsg = "Analyzing data..."
+
+	go func() {
+		result := a.runAgenticQuery(content)
+		if a.program != nil {
+			a.program.Send(result)
+		}
+	}()
+
+	return a, nil
+
+	// --- Agentic Query result (async) ---
+	case DataAnalysisResult:
+		content := a.pendingAgentic.question
+		if content == "" {
+			return a, nil // stale result
+		}
+		a.pendingAgentic.question = ""
+
+		// Build context from RAG + Agentic Query result
+		if a.pendingAgentic.ragCtx != nil && len(a.pendingAgentic.ragCtx) > 0 {
+			var ragParts []string
+			ragParts = append(ragParts, "\n[Context from knowledge base:]")
+			for _, src := range a.pendingAgentic.ragCtx {
+				ragParts = append(ragParts, fmt.Sprintf("Source %s (relevance: %.2f):", src.File, src.Score))
+				ragParts = append(ragParts, src.Text)
+			}
+			content = strings.Join(ragParts, "\n") + "\n\nUser question: " + content
+		}
+		if msg.Answer != "" {
+			content = fmt.Sprintf("[Data from dataset: %s]\n\nUser question: %s", msg.Answer, content)
+		}
+		if msg.Error != "" {
+			a.appendLine(helpStyle.Render("[Data analysis unavailable: " + msg.Error + "]"))
+		}
+
+		// Compact thread if context window is getting full
+		a.compactThreadIfNeeded()
+
+		// Add user message to thread with enriched context
+		a.thread.Add(conversation.Message{
+			Role:    conversation.RoleUser,
+			Content: content,
+		})
+		a.updateTokenCount()
+
+		// Start streaming
+		a.statusMsg = fmt.Sprintf("Thinking (%s)...", a.models.Active())
+		return a, streamChatCmd(a.client, a.models, a.thread)
 
 	// --- File scanning ---
 	case ScanRequested:
@@ -3502,6 +3531,44 @@ func (a *Application) queryRAG(question string, topK int) (*rag.QueryResult, err
 		return nil, nil // RAG not available, silently skip
 	}
 	return a.ragClient.QueryDeep(question, topK, "gemma4:e4b")
+}
+
+// runAgenticQuery runs in a goroutine to answer a question from the dataset using Pandas code.
+// Returns DataAnalysisResult to be processed by the Update loop.
+func (a *Application) runAgenticQuery(question string) DataAnalysisResult {
+	if a.pkb == nil {
+		return DataAnalysisResult{Question: question}
+	}
+	projectDir := a.pkb.ProjectDir()
+	if projectDir == "" {
+		return DataAnalysisResult{Question: question}
+	}
+	ds, err := ranking.LoadDataset(projectDir)
+	if err != nil || ds == nil || ds.SourceFile == "" {
+		return DataAnalysisResult{Question: question}
+	}
+	if errMsg := a.ensureRAGStarted(); errMsg != "" {
+		// RAG worker not available — Agentic Query can't run
+		return DataAnalysisResult{Question: question, Error: errMsg}
+	}
+	resp, err := a.ragClient.QueryAgentic(ds.SourceFile, question, "qwen2.5-coder:7b")
+	if err != nil {
+		return DataAnalysisResult{Question: question, Error: err.Error()}
+	}
+	if resp.Type == "error" {
+		errMsg := resp.Error
+		if errMsg == "" {
+			errMsg = resp.Message
+		}
+		if errMsg == "" {
+			errMsg = "query failed"
+		}
+		return DataAnalysisResult{Question: question, Error: errMsg}
+	}
+	if resp.Type == "query_answer" && resp.Answer != "" {
+		return DataAnalysisResult{Question: question, Answer: resp.Answer}
+	}
+	return DataAnalysisResult{Question: question}
 }
 
 // ingestLocalCmd parses a file locally and registers it as the active dataset (fast, no embeddings).
