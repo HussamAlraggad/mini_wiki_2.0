@@ -3509,11 +3509,13 @@ func (a *Application) ensureRAGStarted() string {
 }
 
 // queryRAG queries the RAG worker for relevant context, returning sources and answer.
+// Uses on-demand deep reading (gemma4 analyzes top chunks like a human researcher)
+// for richer, more insightful answers.
 func (a *Application) queryRAG(question string, topK int) (*rag.QueryResult, error) {
 	if errMsg := a.ensureRAGStarted(); errMsg != "" {
 		return nil, nil // RAG not available, silently skip
 	}
-	return a.ragClient.Query(question, topK)
+	return a.ragClient.QueryDeep(question, topK, "gemma4:e4b")
 }
 
 // ingestLocalCmd parses a file locally and registers it as the active dataset (fast, no embeddings).

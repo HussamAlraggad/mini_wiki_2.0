@@ -332,10 +332,22 @@ func (c *Client) killProcess() {
 
 // Query sends a question to the RAG worker and returns the answer with sources.
 func (c *Client) Query(text string, topK int) (*QueryResult, error) {
+	return c.query(text, topK, false, "")
+}
+
+// QueryDeep sends a question with on-demand deep reading enabled.
+// Retrieved chunks are first read by gemma4 like a human researcher,
+// producing detailed understanding text for richer answers.
+func (c *Client) QueryDeep(text string, topK int, deepModel string) (*QueryResult, error) {
+	return c.query(text, topK, true, deepModel)
+}
+
+// query is the shared implementation for regular and deep queries.
+func (c *Client) query(text string, topK int, deep bool, deepModel string) (*QueryResult, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	req := Request{Cmd: "query", Text: text, TopK: topK}
+	req := Request{Cmd: "query", Text: text, TopK: topK, Deep: deep, DeepModel: deepModel}
 	if err := c.sendRequest(req); err != nil {
 		return nil, err
 	}

@@ -139,6 +139,8 @@ def main():
 
                 top_k = cmd.get("top_k", 5)
                 current_llm = cmd.get("llm_model", llm_model)
+                deep = cmd.get("deep", False)
+                deep_model = cmd.get("deep_model", "gemma4:e4b")
 
                 result = query(
                     question=text,
@@ -147,6 +149,8 @@ def main():
                     llm_model=current_llm,
                     top_k=top_k,
                     ollama_base=ollama_url,
+                    deep=deep,
+                    deep_model=deep_model,
                 )
                 send_response({
                     "type": "answer",

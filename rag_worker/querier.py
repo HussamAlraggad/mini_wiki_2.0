@@ -12,6 +12,7 @@ from urllib.error import URLError
 
 from rag_worker.embedder import Embedder
 from rag_worker.vectordb import VectorDB
+from rag_worker.deep_reader import deep_read
 
 logger = logging.getLogger(__name__)
 
@@ -34,8 +35,15 @@ def query(
     top_k: int = 5,
     system_prompt: str = None,
     ollama_base: str = "http://127.0.0.1:11434",
+    deep: bool = False,
+    deep_model: str = "gemma4:e4b",
 ) -> QueryResult:
     """Run a RAG query: embed -> search -> retrieve -> LLM -> answer.
+
+    When deep=True, retrieved chunks are first read by gemma4 like a human
+    researcher, producing detailed understanding text that replaces raw chunks
+    in the LLM context. Adds ~10-25 seconds per question but gives much richer,
+    more human-like answers.
 
     Args:
         question: User's question
@@ -45,6 +53,8 @@ def query(
         top_k: Number of chunks to retrieve
         system_prompt: Override default system prompt
         ollama_base: Ollama base URL
+        deep: If True, use on-demand deep reading of retrieved chunks
+        deep_model: LLM model to use for deep reading
 
     Returns:
         QueryResult with answer and sources
@@ -62,28 +72,45 @@ def query(
             model=llm_model,
         )
 
-    # 3. Format context from retrieved chunks
+    # 3. Retrieve chunks and optionally do deep reading
     sources = []
     context_parts = []
+
+    # Limit deep reading to top 3 chunks to keep latency reasonable
+    deep_limit = min(3, len(results)) if deep else 0
+
     for i, r in enumerate(results):
         source = r.get("metadata", {}).get("source", "unknown")
         score = r.get("score", 0)
         text = r.get("text", "")
 
-        # Truncate very long chunks for display
         display_text = text[:300] + "..." if len(text) > 300 else text
-
         sources.append({
             "file": source,
             "score": round(score, 3),
             "text": display_text,
         })
+
+        # Deep reading: gemma4 reads the chunk like a human
+        if i < deep_limit:
+            logger.warning(f"Deep reading chunk {i+1}/{deep_limit}...")
+            try:
+                understanding = deep_read(text, deep_model, ollama_base)
+                context_parts.append(
+                    f"SOURCE {i+1}: {source}\n"
+                    f"[Deep analysis of this source by a research expert:]\n{understanding}"
+                )
+                continue
+            except Exception as e:
+                logger.warning(f"Deep read failed for chunk {i+1}: {e}")
+
+        # Fallback: use cleaned chunk text
         clean_text = format_chunk_text(text, source)
         context_parts.append(f"SOURCE {i+1}: {source}\n{clean_text}")
 
     context = "\n\n---\n\n".join(context_parts)
 
-    # 4. Call LLM with context
+    # 4. Build system prompt
     if system_prompt is None:
         system_prompt = (
             "You are a research assistant analyzing documents. "
@@ -93,6 +120,17 @@ def query(
             "Cite the source file names when using specific information from the context."
         )
 
+    if deep:
+        system_prompt = (
+            "You are a brilliant research assistant with access to both raw data "
+            "and expert-level analyses of that data. The context below includes "
+            "deep analyses written by a research expert who read the original sources. "
+            "Use these analyses to provide a thorough, insightful, and human-like answer. "
+            "Synthesize patterns, explain implications, and connect ideas. "
+            "Cite sources when using specific information."
+        )
+
+    # 5. Call LLM with context
     answer = call_llm(
         model=llm_model,
         system=system_prompt,
