@@ -234,7 +234,7 @@ def ingest_large_text_file(
                     continue
 
                 # Embed and store this line's chunks
-                        n = _embed_and_store(path, source_name, chunks, embedder, vector_db, progress_callback, deep_read_func)
+                n = _embed_and_store(path, source_name, chunks, embedder, vector_db, progress_callback, deep_read_func)
                 total_chunks += n
                 embedded_chunks_total += len(chunks)
 
