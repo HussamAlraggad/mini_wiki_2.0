@@ -23,6 +23,8 @@ type Request struct {
 	TopK       int    `json:"top_k,omitempty"`
 	EmbedModel string `json:"embed_model,omitempty"`
 	LLMModel   string `json:"llm_model,omitempty"`
+	Deep       bool   `json:"deep,omitempty"`
+	DeepModel  string `json:"deep_model,omitempty"`
 }
 
 // Response types received from the Python worker via stdout.
@@ -225,9 +227,27 @@ func (c *Client) Ingest(path string, embedModel string) (*IngestResult, error) {
 // On timeout or error, the Python worker process is killed.
 // Returns the number of chunks indexed on success.
 func (c *Client) IngestStream(path string, embedModel string, onProgress func(msg string)) (int, error) {
+	return c.ingestStream(path, embedModel, "", onProgress)
+}
+
+// IngestStreamDeep sends a file with 'deep reading' enabled.
+// Each chunk is first read by gemma4 (or another model) like a human researcher,
+// producing a detailed understanding. Both the original and understanding are stored.
+func (c *Client) IngestStreamDeep(path string, embedModel string, deepModel string, onProgress func(msg string)) (int, error) {
+	return c.ingestStream(path, embedModel, deepModel, onProgress)
+}
+
+// ingestStream is the shared implementation for both regular and deep ingestion.
+func (c *Client) ingestStream(path string, embedModel string, deepModel string, onProgress func(msg string)) (int, error) {
 	c.mu.Lock()
 
-	req := Request{Cmd: "ingest", Path: path, EmbedModel: embedModel}
+	req := Request{
+		Cmd:        "ingest",
+		Path:       path,
+		EmbedModel: embedModel,
+		Deep:       deepModel != "",
+		DeepModel:  deepModel,
+	}
 	if err := c.sendRequest(req); err != nil {
 		c.mu.Unlock()
 		return 0, err

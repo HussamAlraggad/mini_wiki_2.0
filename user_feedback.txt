@@ -1,85 +1,36 @@
-I have a design update for the TUI, first of it must stays as is (in it's own terminal window), but with the following updates, as much as possible, no need to force anything:
-The plan:
-Role and Objective:
-You are an expert Terminal User Interface (TUI) developer. I need you to implement a specific UI design for a TUI application I am building using [INSERT FRAMEWORK HERE].
+Note 1:
+What if my RAG tool read the dataset or the given file as if it was a human reading instead of a machine?
+And then, it understands the read text whatever it is, using the AI's little brains, and it stores The understanding in the very detailed boring long way.
+Hmmmm, that would be awesome aaaaaand the way things should be.
 
-Color Palette:
-Please use the following hex codes for styling the UI components. This is based on a Tokyo Night theme:
 
-Background: #1a1b26 (Use for the main application background)
+Note 2:
+I was thinking about the way the visual content is rendered in the tool, I think it's rendered line by line as if everything in the TUI is a character written from left to right, from top to bottom. Am I right? Is what I mentioned is actually the TUI right now? Answer me please!
+But that feels wrong... The TUI I'm supposed to have must be different, as if each part of the TUI is a container... Like this:
 
-Foreground / Text: #c0caf5 (Standard text color)
+------------------------------------------------------------------------------------------------------------------------------
+|                                                                                                   |                        |
+|                                                                                                   |                        |
+|                                                                                                   |                        |
+|                                                                                                   |                        |
+|                                                                                                   |                        |
+|                                                                                                   |                        |
+|                                                                                                   |                        |
+|                                                                                                   |                        |
+|                                                                                                   |                        |
+|                               Container                                                           |                        |
+|                                   A                                                               |                        |
+|                                                                                                   |      Container C       |
+|                                                                                                   |                        |
+|                                                                                                   |                        |
+|                                                                                                   |                        |
+|                                                                                                   |                        |
+|                                                                                                   |                        |
+|                                                                                                   |                        |
+----------------------------------------------------------------------------------------------------|                        |
+|                                                                                                   |                        |
+|                           Container B                                                             |                        |
+|                                                                                                   |                        |
+------------------------------------------------------------------------------------------------------------------------------
 
-Selection: #283457 (Use for highlighted items in menus/lists)
-
-Comment / Muted Text: #565f89 (Use for secondary text, placeholder text, or less important stats)
-
-Cursor: #c0caf5 (Use for the input cursor)
-
-Line Highlight / Alternate Background: #292e42 (Use for message bubbles or input background to distinguish them from the main background)
-
-Border / Subtle: #3b4261 (Use for all dividing lines, panel borders, and separators)
-
-Overall Layout:
-The application should take up the full terminal window and is divided into four main sections:
-
-Header (Top): A horizontal bar spanning the full width.
-
-Left Panel - Chat & Input (Main Area): Takes up roughly 75-80% of the screen width.
-
-Right Panel - Sidebar: Takes up the remaining 20-25% of the screen width.
-
-Footer (Bottom): A horizontal bar spanning the full width.
-
-Detailed Component Breakdown:
-
-1. Header:
-
-Centered text reading: "Mini Wiki | Project Title"
-
-A solid horizontal bottom border separating it from the main content, using the Border color (#3b4261).
-
-2. Left Panel (Chat History & Input):
-
-Chat History Area: * Occupies the top ~80% of the left panel.
-
-Displays alternating messages (User vs. Assistant).
-
-Assistant messages should have a slightly different background (#292e42) to stand out from the main background (#1a1b26).
-
-Input Area (Bottom of Left Panel):
-
-Separated from the chat history by a solid horizontal border (#3b4261).
-
-Contains an active text input field with a block cursor.
-
-Autocomplete/Command Popup State: The input area needs to support a popup menu state (triggered by typing something like @hint_). When active, a vertical list of selectable options (e.g., @hint_1, @hint_2, @hint_3) should appear directly above the input line. The currently selected option in this menu should use the Selection color (#283457).
-
-Include a subtle left-hand accent border (using the Foreground or Muted text color) next to the active input/popup area to indicate focus.
-
-3. Right Panel (Sidebar):
-
-Separated from the Left Panel by a solid vertical border (#3b4261).
-
-Top aligned text.
-
-Content includes:
-
-"Session title" (Standard text)
-
-"Context" (Standard text, perhaps slightly bolded or designated as a sub-header)
-
-"139 tokens" (Use Comment/Muted color #565f89)
-
-"17% used" (Use Comment/Muted color #565f89)
-
-4. Footer:
-
-Separated from the Main Panels by a solid horizontal border (#3b4261).
-
-Left-aligned text: "Mini Wiki • model_name" (Make "Mini Wiki" slightly brighter or bold, and "model_name" the Muted color).
-
-Right-aligned text: Current file path (e.g., ~/the/full/path/to/the/project). Use the Muted color (#565f89) for the base path and the standard Foreground color (#c0caf5) for the current active directory/project name.
-
-Implementation Request:
-Please provide the complete code to generate this layout. Ensure the borders connect cleanly and the layout is responsive to terminal resizing. Focus on getting the grid/layout and exact colors correct first.
+Each container is isolated from the others in terms of interactions.

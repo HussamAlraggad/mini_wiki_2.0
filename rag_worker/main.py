@@ -40,6 +40,7 @@ from rag_worker.ingester import ingest_file, IngestionResult
 from rag_worker.querier import query, QueryResult
 from rag_worker.agentic_ranker import agentic_rank
 from rag_worker.agentic_query import agentic_query
+from rag_worker.deep_reader import deep_read
 
 logging.basicConfig(
     level=logging.WARNING,
@@ -104,11 +105,17 @@ def main():
                 if "embed_model" in cmd and cmd["embed_model"]:
                     current_embedder = Embedder(model=cmd["embed_model"], base_url=ollama_url)
 
+                # Deep reading support: AI reads each chunk like a human
+                deep_model = cmd.get("deep_model", "")  # e.g. "gemma4:e4b"
+                deep_func = None
+                if cmd.get("deep", False) and deep_model:
+                    deep_func = lambda t: deep_read(t, deep_model, ollama_url)
+
                 # Progress callback sends real-time updates to Go client
                 def on_progress(msg):
                     send_response({"type": "progress", "message": msg})
 
-                result = ingest_file(path, current_embedder, vector_db, chunk_size, overlap, progress_callback=on_progress)
+                result = ingest_file(path, current_embedder, vector_db, chunk_size, overlap, progress_callback=on_progress, deep_read_func=deep_func)
                 # Send any remaining progress messages
                 if result.progress:
                     for p in result.progress:

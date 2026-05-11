@@ -92,7 +92,7 @@ type (
 		Error    string
 		Progress []string
 	}
-	EmbedRequested struct{}
+	EmbedRequested struct{ Deep bool }
 
 	// Phase 3: Web fetching
 	FetchRequested  struct{ URL string }
@@ -732,8 +732,12 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case EmbedRequested:
 		a.busy = true
-		a.statusMsg = "Starting embedding (press Escape to cancel)..."
-		a.appendLine("=== Starting embedding for RAG search (press Escape to cancel) ===\n")
+		mode := "embedding"
+		if msg.Deep {
+			mode = "deep embedding with AI reading"
+		}
+		a.statusMsg = fmt.Sprintf("Starting %s (press Escape to cancel)...", mode)
+		a.appendLine(fmt.Sprintf("=== Starting %s (press Escape to cancel) ===\n", mode))
 		// Get active dataset path
 		filePath, _, err := a.pkb.GetActiveDataset(context.Background())
 		if err != nil {
@@ -741,7 +745,7 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.errMsg = "No dataset ingested. Run /ingest first."
 			return a, nil
 		}
-		go a.embedStream(filePath)
+		go a.embedStream(filePath, msg.Deep)
 		return a, nil
 
 	// --- Ranking ---
@@ -1542,7 +1546,13 @@ func (a *Application) handleCommand(cmd string) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case "/embed":
-		return a, func() tea.Msg { return EmbedRequested{} }
+		deep := false
+		for _, p := range parts {
+			if p == "--deep" {
+				deep = true
+			}
+		}
+		return a, func() tea.Msg { return EmbedRequested{Deep: deep} }
 
 	case "/chart":
 		if len(parts) < 2 {
@@ -3595,7 +3605,7 @@ func countXLSXRows(path string) int {
 }
 
 // embedStream runs the RAG embedder in a goroutine (for /embed command).
-func (a *Application) embedStream(filePath string) {
+func (a *Application) embedStream(filePath string, deep bool) {
 	p := a.program
 	if p == nil {
 		return
@@ -3606,9 +3616,17 @@ func (a *Application) embedStream(filePath string) {
 		return
 	}
 
-	chunks, err := a.ragClient.IngestStream(filePath, "nomic-embed-text", func(msg string) {
-		p.Send(RAGProgressMsg{Text: msg})
-	})
+	var chunks int
+	var err error
+	if deep {
+		chunks, err = a.ragClient.IngestStreamDeep(filePath, "nomic-embed-text", "gemma4:e4b", func(msg string) {
+			p.Send(RAGProgressMsg{Text: msg})
+		})
+	} else {
+		chunks, err = a.ragClient.IngestStream(filePath, "nomic-embed-text", func(msg string) {
+			p.Send(RAGProgressMsg{Text: msg})
+		})
+	}
 	if err != nil {
 		p.Send(RAGDone{Path: filePath, Error: err.Error()})
 		return

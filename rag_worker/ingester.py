@@ -110,6 +110,7 @@ def ingest_file(
     chunk_size: int = 1500,
     overlap: int = 200,
     progress_callback=None,
+    deep_read_func=None,
 ) -> IngestionResult:
     """Ingest a single file into the vector database.
 
@@ -135,7 +136,7 @@ def ingest_file(
         progress.append(f"Reading {os.path.basename(path)} ({file_size / 1024:.0f} KB)...")
         # For JSONL/CSV files: process line-by-line to save memory
         if ext in (".jsonl", ".ndjson", ".csv", ".tsv") and file_size > LARGE_FILE_WARN:
-            result = ingest_large_text_file(path, embedder, vector_db, chunk_size, overlap, progress_callback=progress_callback)
+            result = ingest_large_text_file(path, embedder, vector_db, chunk_size, overlap, progress_callback=progress_callback, deep_read_func=deep_read_func)
             result.progress = progress + result.progress
             return result
 
@@ -147,7 +148,7 @@ def ingest_file(
         if not text:
             return IngestionResult(path=path, error="File is empty", progress=progress)
 
-        result = _chunk_and_embed(path, text, embedder, vector_db, chunk_size, overlap)
+        result = _chunk_and_embed(path, text, embedder, vector_db, chunk_size, overlap, deep_read_func=deep_read_func)
         result.progress = progress + result.progress
         return result
 
@@ -179,6 +180,7 @@ def ingest_large_text_file(
     chunk_size: int = 1500,
     overlap: int = 200,
     progress_callback=None,
+    deep_read_func=None,
 ) -> IngestionResult:
     """Ingest a large text file (CSV, JSONL) one line at a time.
 
@@ -232,7 +234,7 @@ def ingest_large_text_file(
                     continue
 
                 # Embed and store this line's chunks
-                n = _embed_and_store(path, source_name, chunks, embedder, vector_db, progress_callback)
+                        n = _embed_and_store(path, source_name, chunks, embedder, vector_db, progress_callback, deep_read_func)
                 total_chunks += n
                 embedded_chunks_total += len(chunks)
 
@@ -258,6 +260,7 @@ def _chunk_and_embed(
     vector_db: VectorDB,
     chunk_size: int,
     overlap: int,
+    deep_read_func=None,
 ) -> IngestionResult:
     """Chunk text, embed in batches, store in vector DB."""
     progress = []
@@ -269,7 +272,7 @@ def _chunk_and_embed(
     progress.append(f"Generated {len(chunks)} chunks")
     progress.append(f"Embedding {len(chunks)} chunks...")
 
-    n = _embed_and_store(path, os.path.basename(path), chunks, embedder, vector_db)
+    n = _embed_and_store(path, os.path.basename(path), chunks, embedder, vector_db, deep_read_func=deep_read_func)
     total_in_db = vector_db.count()
 
     progress.append(f"Stored {n} chunks in database")
@@ -283,23 +286,93 @@ def _embed_and_store(
     embedder: Embedder,
     vector_db: VectorDB,
     progress_callback=None,
+    deep_read_func=None,
 ) -> int:
-    """Embed chunks in batches and store in vector DB. Frees memory between batches."""
+    """Embed chunks in batches and store in vector DB. Frees memory between batches.
+
+    If deep_read_func is provided, each chunk is also sent through a 'deep reading'
+    LLM that produces a human-like understanding. Both the original chunk and the
+    AI's understanding are embedded and stored.
+    """
     all_embeddings = []
+    all_texts = []
+    all_ids = []
+    all_metadatas = []
     total_embedded = 0
+    source_base = source_name
 
     for i in range(0, len(chunks), BATCH_SIZE):
         batch = chunks[i:i + BATCH_SIZE]
-        # Send progress every 10 batches to keep the Go idle timer alive
         if i % (BATCH_SIZE * 10) == 0 and progress_callback:
             done = min(i + BATCH_SIZE, len(chunks))
             progress_callback(f"  Embedding {done}/{len(chunks)} chunks...")
+
+        # If deep reading is enabled, process each chunk through the LLM first
+        if deep_read_func:
+            understanding_texts = []
+            for ci, chunk in enumerate(batch):
+                abs_idx = i + ci
+                if progress_callback and ci % 5 == 0:
+                    progress_callback(f"  Deep reading chunk {abs_idx + 1}/{len(chunks)}...")
+                try:
+                    understanding = deep_read_func(chunk)
+                    understanding_texts.append(understanding)
+                except Exception as e:
+                    logger.warning(f"  Deep read failed for chunk {abs_idx + 1}: {e}")
+                    understanding_texts.append(chunk)  # fallback: use original
+
+            # Embed understanding texts alongside originals
+            all_understandings = embedder.embed(understanding_texts)
+            if all_understandings:
+                for ci, (chunk, understanding, emb) in enumerate(zip(batch, understanding_texts, all_understandings)):
+                    abs_idx = i + ci
+                    chunk_hash = hashlib.md5(chunk.encode()).hexdigest()[:12]
+                    # Store original chunk
+                    all_ids.append(f"{source_base}_{abs_idx}_{chunk_hash}")
+                    all_texts.append(chunk)
+                    all_embeddings.append(emb)
+                    all_metadatas.append({
+                        "source": source_base,
+                        "path": path,
+                        "chunk_index": abs_idx,
+                        "type": "original",
+                        "char_count": len(chunk),
+                    })
+                    # Store understanding as a separate entry
+                    understanding_hash = hashlib.md5(understanding.encode()).hexdigest()[:12]
+                    u_emb = embedder.embed([understanding])[0]
+                    all_ids.append(f"{source_base}_{abs_idx}_{understanding_hash}_deep")
+                    all_texts.append(understanding)
+                    all_embeddings.append(u_emb)
+                    all_metadatas.append({
+                        "source": source_base,
+                        "path": path,
+                        "chunk_index": abs_idx,
+                        "type": "deep_understanding",
+                        "char_count": len(understanding),
+                    })
+                total_embedded = min(i + BATCH_SIZE, len(chunks)) * 2
+                continue
+
+        # Standard path: batch embed as usual
         batch_embeddings = embedder.embed(batch)
         if not batch_embeddings:
             logger.warning(f"  Batch {i // BATCH_SIZE + 1}: embedding returned empty")
             continue
 
-        all_embeddings.extend(batch_embeddings)
+        for ci, chunk in enumerate(batch):
+            abs_idx = i + ci
+            chunk_hash = hashlib.md5(chunk.encode()).hexdigest()[:12]
+            all_ids.append(f"{source_base}_{abs_idx}_{chunk_hash}")
+            all_texts.append(chunk)
+            all_embeddings.append(batch_embeddings[ci] if ci < len(batch_embeddings) else [0.0])
+            all_metadatas.append({
+                "source": source_base,
+                "path": path,
+                "chunk_index": abs_idx,
+                "type": "original",
+                "char_count": len(chunk),
+            })
         done = min(i + BATCH_SIZE, len(chunks))
         logger.info(f"  Embedded {done}/{len(chunks)} chunks")
         total_embedded = done
@@ -307,26 +380,19 @@ def _embed_and_store(
     if not all_embeddings:
         return 0
 
-    # Prepare data for ChromaDB
-    ids = []
-    metadatas = []
-    for i, chunk in enumerate(chunks):
-        chunk_hash = hashlib.md5(chunk.encode()).hexdigest()[:12]
-        ids.append(f"{source_name}_{i}_{chunk_hash}")
-        metadatas.append({
-            "source": source_name,
-            "path": path,
-            "chunk_index": i,
-            "total_chunks": len(chunks),
-            "char_count": len(chunk),
-        })
-
-    # Store in vector DB (this persists to disk, freeing Go memory)
-    vector_db.add_documents(ids=ids, embeddings=all_embeddings, texts=chunks, metadatas=metadatas)
+    # Store all accumulated data (originals + understandings if deep)
+    if all_ids:
+        vector_db.add_documents(
+            ids=all_ids,
+            embeddings=all_embeddings,
+            texts=all_texts,
+            metadatas=all_metadatas,
+        )
 
     # Free memory explicitly
     del all_embeddings
-    del ids
-    del metadatas
+    del all_ids
+    del all_texts
+    del all_metadatas
 
-    return len(chunks)
+    return len(all_ids)
