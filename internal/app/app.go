@@ -1298,6 +1298,24 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.updateSuggestions()
 		return a, cmd
 
+	// --- Mouse events (wheel only — Shift+click for text selection) ---
+	case tea.MouseMsg:
+		if msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown {
+			rightW := 0
+			if a.showInfoPanel {
+				rightW = a.width * 20 / 100
+				if rightW < 18 {
+					rightW = 18
+				}
+			}
+			if a.showInfoPanel && msg.X > a.width-rightW {
+				a.rightViewport, _ = a.rightViewport.Update(msg)
+			} else {
+				a.viewport, _ = a.viewport.Update(msg)
+			}
+		}
+		return a, nil
+
 	// --- Task messages ---
 	case TaskAddRequested:
 		if msg.Text != "" {
