@@ -143,12 +143,15 @@ These rules are **mandatory**. Violations will be rejected.
   - Any operation > 1 second
 - **No decorative animations.** No transitions. No bounce effects.
 
-### 4.4 Layout
-- Fixed layout: chat panel (left, ~70%) + session panel (right, ~30%)
-- Bottom input bar with text input
-- Bottom status bar showing: active model, token count, loaded files
-- Minimum terminal size: 80x24 characters
-- If terminal is too small, show a centered warning message
+### 4.4 Layout (5-Container Model)
+- **Container D (Header)**: Fixed top bar, centered `[+] Mini Wiki | Project`, bottom border
+- **Container A (Chat)**: Main left panel, scrollable `viewport.Model`, ~75% width
+- **Container C (Right Panel)**: Sidebar info, **independently scrollable** `viewport.Model`, ~25% width
+- **Container B (Input)**: `textarea.Model` auto-expands vertically up to 8 lines.
+  Enter submits, Alt+Enter inserts newline.
+- **Container E (Footer)**: Model name left, file path right, top border
+- Containers are visually seamless (no borders between them), only separated by content
+- Minimum terminal size: 80x24 characters. If too small, show a centered warning.
 
 ### 4.5 Naming Convention (Code & UI)
 - Use descriptive, boring names. No "clever" or "fun" names.
@@ -246,13 +249,27 @@ When a file is provided via `/ingest @<file>`, the tool must:
 - Auto-scroll to bottom on new messages.
 - User can scroll up to read history (mouse wheel or PageUp/PageDown).
 
-### 7.2 RAG-Enhanced Answers
-- Every user message automatically triggers a RAG search:
-  1. Embed the user's question using the embedding model
-  2. Search ChromaDB for top-5 most relevant chunks
-  3. Inject chunks as context into the LLM prompt
-  4. LLM generates answer with source references
-- If the knowledge base is empty (no ingested files), RAG is skipped silently.
+### 7.2 Agentic Query + Deep RAG (Two-Layer Answering)
+Every user message goes through two parallel layers:
+
+1. **Agentic Query** (async, non-blocking):
+   - Sends dataset schema + question to `qwen2.5-coder:7b` in a goroutine
+   - LLM writes a Pandas query function, executed sandboxed on the actual data
+   - Returns exact computed answers (e.g., "42 rows match 'Blazemeter/taurus'")
+   - Works immediately after `/ingest`, no `/embed` needed
+   - Result is injected as `[Data from dataset: ...]` before the LLM prompt
+
+2. **Deep RAG** (if ChromaDB has chunks):
+   - Embeds the question, searches ChromaDB for top-3 most relevant chunks
+   - Each chunk is sent to `gemma4:e4b` for "deep reading" like a human researcher
+   - gemma4 returns detailed analysis/understanding of each chunk
+   - The analysis replaces raw chunks in the LLM context
+   - Adds ~15 seconds per question but gives rich, human-like answers
+   - Falls back to raw chunks if gemma4 is unavailable
+
+3. **Combined**: The Agentic Query result + Deep RAG context are both prepended
+   to the user's question before sending to the chat model, which synthesizes
+   everything into a coherent answer.
 
 ### 7.3 Conversation Management
 - `/clear` -- clear the current conversation (keep the thread, remove all messages).

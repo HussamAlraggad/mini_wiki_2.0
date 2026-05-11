@@ -8,6 +8,64 @@
 
 ---
 
+## May 11 -- Async Agentic Query, dynamic mouse, 5-container layout, docs (COMPLETE)
+
+### What was done
+- **Agentic Query fixed (async)**: Moved to goroutine so TUI stays responsive.
+  Uses `DataAnalysisResult` message type for async response. User sees
+  "Analyzing data..." status. Fixes: silent failure when RAG worker was down.
+- **Python IndentationError fixed**: `ingester.py` line 237 had extra indentation,
+  causing the RAG worker to crash on import. The error was masked as
+  "ModuleNotFoundError: chromadb" because Go tried system python3 as fallback.
+- **Dynamic mouse tracking**: Left-click disables mouse tracking (native text
+  selection works). Typing re-enables it (wheel scrolling works). Best of both.
+- **5-container layout**: Chat (A), input (B), right panel (C) — all isolated.
+  Right panel now has its own scrollable `viewport.Model`. Mouse wheel routes
+  to the correct viewport based on cursor X position.
+- **Alt+Enter for newline**: Enter submits, Alt+Enter inserts newline in textarea.
+  Bubbletea's `msg.Alt` flag distinguishes them.
+- **Auto-expanding input**: Swapped `textinput.Model` for `textarea.Model`.
+  Input expands vertically as you type, up to 8 lines.
+- **Deep RAG (on-demand)**: Retrieved chunks are read by gemma4 like a human
+  researcher before being injected as LLM context. ~15s per question.
+- **Deep RAG embed mode**: `/embed --deep` — offline deep reading of all chunks
+  (not just on-demand). Each chunk read by gemma4, both original + understanding stored.
+
+### Interface changes
+- Added `DataAnalysisResult` message type
+- Added `rightViewport viewport.Model` for scrollable right panel
+- Added `pendingAgentic` struct for async state
+- Added `runAgenticQuery()` method (runs in goroutine)
+- `renderInfoPanel()` now sets content on right viewport
+- Removed: sync Agentic Query block from `UserSendMsg` handler
+- Removed: `tea.WithMouseCellMotion` (re-added, then made dynamic)
+
+### What I struggled with / broke
+- The ingester.py indentation error was the most frustrating bug — it caused
+  the entire RAG worker to crash silently, and the error message pointed at
+  chromadb (completely wrong). Took a full Python process trace to find it.
+- Mouse tracking vs text selection is a fundamental terminal protocol conflict.
+  The dynamic toggle approach (click disables, typing enables) is the best
+  compromise.
+- The 5-container layout required restructuring the View function, which
+  affects ALL layout calculations. Had to carefully recalculate panel heights
+  for textarea auto-expansion.
+
+### Test status
+```
+All suites pass (12 test suites).
+```
+
+### Handoff to next agent
+- Agentic Query now works asynchronously. When user types a question, they see
+  "Analyzing data..." and the result is injected before the LLM responds.
+- The indentation bug in ingester.py is fixed — but `python3 -m py_compile`
+  should be run on all Python files before committing to catch similar issues.
+- Project docs (journal.md, README.md, plan.md) need to stay in sync with
+  commits. 16 commits were made without updating them.
+
+---
+
 ## May 9 (late) -- Agentic Query, inline mode, export fix, chat styling (COMPLETE)
 
 ### What was done
@@ -220,8 +278,8 @@ All tests pass (9 suites, 15 new tests).
 
 | Attribute | Value |
 |---|---|---|
-| **Project Phase** | All features complete. Agentic Ranking + Agentic Query + RAG integrated. |
-| **Last action** | May 9 (late) -- Agentic Query, inline mode default, export dataset fix, chat styling. Embed finished (647K chunks). |
+| **Project Phase** | All features complete. Async Agentic Query working, Deep RAG, 5-container layout. |
+| **Last action** | May 11 -- Fixed async Agentic Query, Python indent bug, dynamic mouse, 5-container layout. Project docs synced. |
 | **Go version** | 1.25.0 |
 | **Ollama version** | 0.20.6 (running) |
 | **Active model** | `gemma4:e4b` (8B params, 131K ctx, Q4_K_M) |

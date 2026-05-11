@@ -5,6 +5,13 @@ A terminal-based AI research assistant for dataset analysis — fully local, no 
 **Ingest** CSV / JSONL / XLSX / TSV → **Rank** by relevance via Agentic AI (seconds, not hours) →
 **Visualize** with ASCII charts → **Export** to Excel/CSV/JSON. Everything runs offline on your GPU.
 
+**Key Features:**
+- **Agentic Ranking** — LLM writes Pandas code to rank/filter datasets. One LLM call, not 92K.
+- **Agentic Query** — Ask questions about your data in natural language. Gets exact Pandas-powered answers.
+- **Deep RAG** — gemma4 reads each retrieved chunk like a human researcher for richer answers.
+- **Auto-expanding input** — Textarea grows as you type. Alt+Enter for newlines.
+- **5-container TUI** — Isolated panels: chat, input, right panel, header, footer. Independent scrolling.
+
 ---
 
 ## Quick Start
@@ -67,12 +74,12 @@ cp wiki ~/.local/bin/wiki
 ## Workflow
 
 ```
-1. /ingest @dataset.csv     # Parse file (< 1 second) — ready for /rank
-2. /rank "research topic"   # Agentic AI ranking (seconds, not hours)
-3. /chart bar column=score  # Visualize results
-4. /export --ranked          # Export to Excel with relevance scores
-5. /embed                    # (Optional) Index for RAG chat
-6. Type questions            # Auto-RAG if embedded
+1. /ingest @dataset.csv         # Parse file (< 1 second) — ready for /rank
+2. /rank "research topic"       # Agentic AI ranking (seconds, not hours)
+3. Type a question              # Auto Agentic Query + Deep RAG answer
+4. /chart bar column=score      # Visualize results
+5. /export --ranked              # Export to Excel with relevance scores
+6. /embed [--deep]               # (Optional) Index for RAG chat with deep reading
 ```
 
 ---
@@ -125,16 +132,24 @@ Then inside the TUI: `/refresh` to see it, `/model <name>` to activate it.
 
 ---
 
-## Text Selection & Copying
+## Text Selection & Scrolling
 
 | Action | How |
 |---|---|
-| **Click-drag + release** | Auto-copies visible text to clipboard |
+| **Mouse wheel** | Scrolls chat or right panel (routes by cursor position) |
+| **Left-click** | Disables mouse tracking → native terminal text selection works |
+| **Type in input** | Re-enables mouse tracking → wheel scrolling works again |
 | **`/clip`** | Copy entire viewport to clipboard |
-| **`wiki --select`** | Inline mode (native terminal selection) |
 
-During a click-drag, the selected lines are **highlighted** and the input box shows
-`SELECTING — release mouse button to copy text to clipboard`.
+Cycle: **scroll → click → select → type → scroll → ...**
+
+## Input & Newlines
+
+| Key | Action |
+|---|---|
+| **Enter** | Submit message |
+| **Alt+Enter** | Insert newline in message (multi-line input) |
+| **Input box** | Auto-expands vertically as you type (up to 8 lines) |
 
 ---
 
@@ -149,6 +164,7 @@ During a click-drag, the selected lines are **highlighted** and the input box sh
 | `/ingest @file` | Parse file and register as active dataset (< 1 second) |
 | `/infer @file` | Auto-detect file format |
 | `/embed` | Embed for RAG chat (optional, slow — see progress with ETA) |
+| `/embed --deep` | Embed with AI deep reading (gemma4 reads each chunk like a human) |
 
 ### Agentic Ranking
 
