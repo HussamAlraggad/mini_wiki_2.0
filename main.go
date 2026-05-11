@@ -110,7 +110,7 @@ func main() {
 	// --- Run Bubbletea program ---
 	// Default: alt-screen mode (clean full-screen TUI, text selection via Shift+click).
 	// Use --inline for inline mode (native click-drag text selection with mouse).
-	opts := []tea.ProgramOption{tea.WithAltScreen(), tea.WithMouseCellMotion()}
+	opts := []tea.ProgramOption{tea.WithAltScreen()}
 	if *inlineMode {
 		opts = []tea.ProgramOption{}
 	}
