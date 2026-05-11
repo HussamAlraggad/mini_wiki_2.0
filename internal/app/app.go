@@ -399,8 +399,9 @@ func New(cfg *config.Manager, client ollama.Client, mm *modelmgr.Manager, ragWor
 	ti.MaxHeight = 8
 	ti.ShowLineNumbers = false
 	// Map Enter to submit (handled by Update loop), Shift+Enter = newline
+	// Alt+Enter inserts a newline (regular Enter submits the message)
 	ti.KeyMap.InsertNewline.SetEnabled(false)
-	ti.KeyMap.InsertNewline.SetKeys("shift+enter")
+	ti.KeyMap.InsertNewline.SetKeys("alt+enter")
 	ti.KeyMap.InsertNewline.SetEnabled(true)
 	ti.KeyMap.InputEnd.SetKeys("ctrl+e")
 	ti.KeyMap.InputBegin.SetKeys("ctrl+a")
@@ -1234,7 +1235,7 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 
-		// Handle Enter to submit
+		// Handle Enter: submit. Alt+Enter inserts newline.
 		if msg.Type == tea.KeyEnter {
 			// Apply tab-completed suggestion if one is selected
 			if a.tabIndex >= 0 && len(a.suggestions) > 0 && a.tabIndex < len(a.suggestions) {
@@ -1244,6 +1245,13 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				a.clearSuggestions()
 				return a, nil
 			}
+			// Alt+Enter: forward to textarea for newline insertion
+			if msg.Alt {
+				var inpCmd tea.Cmd
+				a.input, inpCmd = a.input.Update(msg)
+				return a, inpCmd
+			}
+			// Regular Enter: submit
 			content := a.input.Value()
 			if content != "" {
 				a.clearSuggestions()
