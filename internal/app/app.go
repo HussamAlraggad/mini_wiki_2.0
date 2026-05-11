@@ -345,9 +345,10 @@ type Application struct {
 	showInfoPanel bool // false = hidden, full width for chat
 
 	// UI components
-	input    textarea.Model
-	viewport viewport.Model
-	spinner  spinner.Model
+	input          textarea.Model
+	viewport       viewport.Model
+	rightViewport  viewport.Model // Container C: right panel (scrollable)
+	spinner        spinner.Model
 
 	// UI state
 	ready            bool
@@ -504,6 +505,13 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.viewport = viewport.New(msg.Width-2, msg.Height-8)
 			a.viewport.YPosition = 4
 			a.viewport.Style = lipgloss.NewStyle().Padding(1)
+			// Right panel viewport (20% width)
+			rightW := msg.Width * 20 / 100
+			if rightW < 18 {
+				rightW = 18
+			}
+			a.rightViewport = viewport.New(rightW, msg.Height-8)
+			a.rightViewport.YPosition = 4
 			a.input.SetWidth(msg.Width - 4)
 			a.ready = true
 			return a, tea.Batch(
@@ -514,6 +522,8 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		a.viewport.Width = msg.Width - 2
 		a.viewport.Height = msg.Height - 8
+		a.rightViewport.Width = msg.Width * 20 / 100
+		a.rightViewport.Height = msg.Height - 8
 		a.input.SetWidth(msg.Width - 4)
 		return a, nil
 
@@ -1283,7 +1293,20 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// --- Mouse events (wheel only — leave clicks for native selection) ---
 	case tea.MouseMsg:
 		if msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown {
-			a.viewport, _ = a.viewport.Update(msg)
+			// Route wheel events to the appropriate viewport based on x position
+			rightW := 0
+			if a.showInfoPanel {
+				rightW = a.width * 20 / 100
+				if rightW < 18 {
+					rightW = 18
+				}
+			}
+			// Only terminal width changes, so check if mouse is in right panel area
+			if a.showInfoPanel && msg.X > a.width-rightW {
+				a.rightViewport, _ = a.rightViewport.Update(msg)
+			} else {
+				a.viewport, _ = a.viewport.Update(msg)
+			}
 		}
 		return a, nil
 
@@ -1741,6 +1764,7 @@ func (a *Application) View() string {
 
 	var panelsRow string
 	if a.showInfoPanel {
+		a.rightViewport.Height = panelH - 2
 		infoContent := a.renderInfoPanel(rightW)
 		rightSty := panelRightStyle
 		rightRendered := rightSty.Width(rightW).Height(panelH - 2).Render(infoContent)
@@ -1835,66 +1859,17 @@ func (a *Application) renderChatPanel(width, totalHeight int) string {
 // renderInfoPanel builds the right panel (session, model, tasks, history).
 func (a *Application) renderInfoPanel(width int) string {
 	var content strings.Builder
-
-	content.WriteString(panelHeaderStyle.Render("SESSION"))
-	content.WriteString("\n")
-	content.WriteString(fmt.Sprintf("  %s %s\n", infoLabelStyle.Render("M:"), infoValueStyle.Render(a.models.Active())))
-	chain := a.models.ActiveChain()
-	if len(chain) > 1 {
-		content.WriteString(fmt.Sprintf("  %s %s\n", infoLabelStyle.Render("F:"), infoValueStyle.Render(chain[1])))
-	}
-	ctxPct := "0%"
+	content.WriteString("Session\n\nContext\n")
+	tokStr := fmt.Sprintf("%d tokens", a.estimatedTokens)
+	ctxPct := "0% used"
 	if a.thread != nil && a.thread.MaxTokens > 0 {
 		pct := a.thread.EstimatedTokens() * 100 / a.thread.MaxTokens
-		ctxPct = fmt.Sprintf("%d%%", pct)
+		ctxPct = fmt.Sprintf("%d%% used", pct)
 	}
-	content.WriteString(fmt.Sprintf("  %s %s\n", infoLabelStyle.Render("Ctx:"), infoValueStyle.Render(ctxPct)))
-	content.WriteString(fmt.Sprintf("  %s %s\n", infoLabelStyle.Render("Tok:"), infoValueStyle.Render(fmt.Sprintf("%d", a.estimatedTokens))))
-
-	content.WriteString("\n")
-	content.WriteString(panelHeaderStyle.Render("TASKS"))
-	content.WriteString("\n")
-	if len(a.tasks) == 0 {
-		content.WriteString("  none\n")
-	} else {
-		maxShow := 4
-		for i, t := range a.tasks {
-			if i >= maxShow {
-				break
-			}
-			mark := " "
-			if t.done {
-				mark = "x"
-			}
-			label := t.text
-			if len(label) > width-6 {
-				label = label[:width-9] + "..."
-			}
-			content.WriteString(fmt.Sprintf("  [%s] %s\n", mark, label))
-		}
-	}
-
-	content.WriteString("\n")
-	content.WriteString(panelHeaderStyle.Render("HX"))
-	content.WriteString("\n")
-	if len(a.actionHistory) == 0 {
-		content.WriteString("  none\n")
-	} else {
-		maxShow := 4
-		start := 0
-		if len(a.actionHistory) > maxShow {
-			start = len(a.actionHistory) - maxShow
-		}
-		for _, act := range a.actionHistory[start:] {
-			label := act
-			if len(label) > width-4 {
-				label = label[:width-7] + "..."
-			}
-			content.WriteString(fmt.Sprintf("  %s\n", label))
-		}
-	}
-
-	return content.String()
+	content.WriteString(fmt.Sprintf("  %s\n  %s\n", tokStr, ctxPct))
+	str := content.String()
+	a.rightViewport.SetContent(str)
+	return a.rightViewport.View()
 }
 
 // shortName shortens a path for display within maxLen.
