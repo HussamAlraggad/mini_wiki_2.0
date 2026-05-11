@@ -1292,13 +1292,13 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, tea.Quit
 		}
 
-		// Forward key events to text input, then update suggestions
+		// Forward key events to text input, update suggestions, re-enable mouse tracking
 		var cmd tea.Cmd
 		a.input, cmd = a.input.Update(msg)
 		a.updateSuggestions()
-		return a, cmd
+		return a, tea.Batch(cmd, tea.EnableMouseCellMotion)
 
-	// --- Mouse events (wheel only — Shift+click for text selection) ---
+	// --- Mouse events (wheel scrolls, click disables tracking for native selection) ---
 	case tea.MouseMsg:
 		if msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown {
 			rightW := 0
@@ -1313,6 +1313,11 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				a.viewport, _ = a.viewport.Update(msg)
 			}
+			return a, nil
+		}
+		// Mouse button press (non-wheel): disable tracking for native terminal selection
+		if msg.Action == tea.MouseActionPress {
+			return a, tea.DisableMouse
 		}
 		return a, nil
 
