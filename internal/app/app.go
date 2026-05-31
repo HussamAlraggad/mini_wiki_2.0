@@ -324,6 +324,20 @@ var (
 			Foreground(tokyoFg)
 )
 
+// AppState represents the current TUI state for clear cognitive boundaries.
+type AppState int
+
+const (
+	StateIdle       AppState = iota // awaiting user input
+	StateStreaming                  // LLM is streaming a chat response
+	StateSearching                  // RAG / Agentic Query is running in background
+	StateRanking                    // ranking operation in progress
+	StateCharting                   // chart generation in progress
+	StateExporting                  // export in progress
+	StateIngesting                  // file ingestion in progress
+	StateConfirming                 // awaiting y/n confirmation (discard preview)
+)
+
 // --- Application Model ---
 
 // Application is the root Bubbletea model containing all state.
@@ -348,7 +362,14 @@ type Application struct {
 	mem        memory.MemStore
 	srsPipeline *srs.Pipeline
 
-	// Right info panel visibility
+	// AppState for clear cognitive state boundaries
+	state AppState
+
+	// pendingIntent is true when a tool call from NL intent is being executed.
+	// It's used in tool-complete handlers to wrap results conversationally.
+	pendingIntent bool
+
+	// Right info panel visibility (default: hidden for chat-first layout)
 	showInfoPanel bool // false = hidden, full width for chat
 
 	// UI components
@@ -443,12 +464,13 @@ func New(cfg *config.Manager, client ollama.Client, mm *modelmgr.Manager, ragWor
 		mem:        memory.New(),
 		ragClient:  rag.New(),
 		ragDir:     ragWorkerDir,
+		state:     StateIdle,
 		thread:    conversation.NewThread("You are a helpful research assistant specializing in Software Engineering. Provide thorough, well-reasoned answers."),
 		input:     ti,
 		spinner:   s,
 		statusMsg:   "Initializing...",
 		showWelcome:   true,
-		showInfoPanel: true,
+		showInfoPanel: false, // chat-first layout: full width by default
 		scanCfg: filescanner.ScannerConfig{
 			RootDir: rootDir,
 			MaxSize: 100 * 1024 * 1024,
@@ -515,6 +537,11 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.width = msg.Width
 		a.height = msg.Height
 
+		// Responsive: auto-hide right panel on narrow terminals
+		if msg.Width < 80 && a.showInfoPanel {
+			a.showInfoPanel = false
+		}
+
 		if !a.ready {
 			a.viewport = viewport.New(msg.Width-2, msg.Height-8)
 			a.viewport.YPosition = 4
@@ -527,6 +554,13 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.rightViewport = viewport.New(rightW, msg.Height-8)
 			a.rightViewport.YPosition = 4
 			a.input.SetWidth(msg.Width - 4)
+			// Input max height proportional to terminal (max 25% of height)
+			a.input.MaxHeight = msg.Height / 4
+			if a.input.MaxHeight < 3 {
+				a.input.MaxHeight = 3
+			} else if a.input.MaxHeight > 12 {
+				a.input.MaxHeight = 12
+			}
 			a.ready = true
 			return a, tea.Batch(
 				refreshModelsCmd(a.client, a.models),
@@ -539,6 +573,13 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.rightViewport.Width = msg.Width * 20 / 100
 		a.rightViewport.Height = msg.Height - 8
 		a.input.SetWidth(msg.Width - 4)
+		// Responsive input max height
+		a.input.MaxHeight = msg.Height / 4
+		if a.input.MaxHeight < 3 {
+			a.input.MaxHeight = 3
+		} else if a.input.MaxHeight > 12 {
+			a.input.MaxHeight = 12
+		}
 		return a, nil
 
 	// --- Ping result ---
@@ -629,6 +670,24 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Render user message in viewport (original text, not RAG-injected)
 	a.appendLine(formatUserMsg(originalContent))
 
+	// --- Intent Detection (NL → Tool dispatch) ---
+	// Run a fast non-streaming LLM call to classify the user's intent.
+	// If it detects a tool request, dispatch to the tool handler.
+	// Otherwise, fall through to the standard RAG + Agentic Query flow.
+	a.statusMsg = "Analyzing request..."
+	intentResult := a.classifyIntent(content)
+	if intentResult != nil {
+		a.pendingIntent = true
+		a.appendToViewport("\n")
+		a.appendLine(helpStyle.Render(fmt.Sprintf("[Running %s...]", intentResult.Tool)))
+		cmd := a.executeIntent(intentResult)
+		if cmd != nil {
+			return a, cmd
+		}
+		// If executeIntent returned nil, fall through
+		a.pendingIntent = false
+	}
+
 	// Do RAG search (fast, synchronous)
 	ragResult, _ := a.queryRAG(content, 3)
 	a.pendingAgentic.ragCtx = nil
@@ -695,12 +754,14 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// --- File scanning ---
 	case ScanRequested:
+		a.state = StateSearching
 		a.busy = true
 		a.statusMsg = "Scanning files..."
 		a.errMsg = ""
 		return a, scanCmd(a.scanner, a.scanCfg)
 
 	case ScanComplete:
+		a.state = StateIdle
 		a.busy = false
 		a.fileIndex = msg.Result
 		summary := fmt.Sprintf("Scanned: %d files, %d dirs, %s total in %s",
@@ -713,6 +774,7 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case ScanFailed:
+		a.state = StateIdle
 		a.busy = false
 		a.errMsg = fmt.Sprintf("Scan failed: %v", msg.Err)
 		return a, nil
@@ -727,12 +789,14 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// --- File ingestion (fast: parse + register, no embeddings) ---
 	case IngestRequested:
+		a.state = StateIngesting
 		a.busy = true
 		path := msg.Path
 		a.statusMsg = fmt.Sprintf("Parsing %s...", filepath.Base(path))
 		return a, ingestLocalCmd(a, path)
 
 	case RAGDone:
+		a.state = StateIdle
 		a.busy = false
 		if msg.Error != "" {
 			a.appendLine(fmt.Sprintf("[Error] %s", msg.Error))
@@ -760,9 +824,21 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case IngestCompleteMsg:
+		a.state = StateIdle
 		a.busy = false
 		a.appendLine(msg.Text)
-		a.statusMsg = "Ingest complete"
+
+		// Proactive assistant: after ingest, auto-analyze with Agentic Query
+		a.statusMsg = "Ingest complete. Analyzing dataset..."
+		projectDir := a.pkb.ProjectDir()
+		if projectDir != "" {
+			go func() {
+				result := a.runAgenticQuery("Summarize this dataset: what columns does it have, how many rows, and what are the key statistics?")
+				if a.program != nil {
+					a.program.Send(result)
+				}
+			}()
+		}
 		return a, nil
 
 	case RAGProgressMsg:
@@ -771,6 +847,7 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case EmbedRequested:
+		a.state = StateSearching
 		a.busy = true
 		mode := "embedding"
 		if msg.Deep {
@@ -790,11 +867,13 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// --- Ranking ---
 	case RankRequested:
+		a.state = StateRanking
 		a.busy = true
 		a.statusMsg = "Ranking dataset..."
 		return a, rankCmd(a, msg.Topic)
 
 	case RankComplete:
+		a.state = StateIdle
 		a.busy = false
 		a.appendLine(msg.Text)
 		if msg.Result != nil {
@@ -805,10 +884,37 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			})
 		}
 		a.statusMsg = "Ranking complete"
+
+		// If triggered by NL intent, wrap result conversationally
+		if a.pendingIntent {
+			a.pendingIntent = false
+			topic := msg.Result.Topic
+			summary := ""
+			if msg.Result.Dataset != nil {
+				summary = fmt.Sprintf("Found %d relevant rows out of %d total.",
+					msg.Result.Dataset.RowCount, msg.Result.Dataset.RowCount+msg.Result.DiscardCount)
+			}
+			a.appendLine(helpStyle.Render("[Generating conversational summary...]"))
+			wrapContent := fmt.Sprintf(
+				"The user asked me to rank the dataset by topic '%s'.\nResult: %s\nRanking table:\n%s\nPlease provide a conversational summary of what was found.",
+				topic, summary, msg.Text,
+			)
+			a.thread.Add(conversation.Message{
+				Role:    conversation.RoleSystem,
+				Content: wrapContent,
+			})
+			a.updateTokenCount()
+			return a, streamChatCmd(a.client, a.models, a.thread)
+		}
 		return a, nil
 
 	case RankFailed:
+		a.state = StateIdle
 		a.busy = false
+		if a.pendingIntent {
+			a.pendingIntent = false
+			a.appendLine(helpStyle.Render(fmt.Sprintf("[Ranking failed: %v]", msg.Err)))
+		}
 		a.errMsg = fmt.Sprintf("Ranking failed: %v", msg.Err)
 		return a, nil
 
@@ -823,6 +929,7 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.appendLine(table)
 		} else {
 			// New topic: rerank and show comparison
+			a.state = StateRanking
 			a.busy = true
 			a.statusMsg = "Re-ranking with new topic..."
 			return a, compareCmd(a, msg.Topic)
@@ -862,6 +969,7 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// Ask for confirmation (preview-only: --preview flag skips confirm)
+		a.state = StateConfirming
 		a.awaitingYn = true
 		a.pendingYNMsg = fmt.Sprintf("Discard %d rows below score %.2f? (y/N)", discard, threshold)
 		a.pendingThreshold = threshold
@@ -875,17 +983,40 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.errMsg = "No data to chart. Ingest a dataset and run /rank first."
 			return a, nil
 		}
+		a.state = StateCharting
 		a.busy = true
 		return a, chartCmd(a, msg)
 
 	case ChartComplete:
+		a.state = StateIdle
 		a.busy = false
 		a.appendLine(msg.Text)
 		a.statusMsg = "Chart rendered"
+
+		// If triggered by NL intent, wrap result conversationally
+		if a.pendingIntent {
+			a.pendingIntent = false
+			a.appendLine(helpStyle.Render("[Generating conversational summary...]"))
+			wrapContent := fmt.Sprintf(
+				"The user asked me to create a chart. The chart was rendered successfully.\nChart output:\n%s\nPlease provide a conversational interpretation of this chart.",
+				msg.Text,
+			)
+			a.thread.Add(conversation.Message{
+				Role:    conversation.RoleSystem,
+				Content: wrapContent,
+			})
+			a.updateTokenCount()
+			return a, streamChatCmd(a.client, a.models, a.thread)
+		}
 		return a, nil
 
 	case ChartFailed:
+		a.state = StateIdle
 		a.busy = false
+		if a.pendingIntent {
+			a.pendingIntent = false
+			a.appendLine(helpStyle.Render(fmt.Sprintf("[Chart failed: %v]", msg.Err)))
+		}
 		a.errMsg = fmt.Sprintf("Chart error: %v", msg.Err)
 		return a, nil
 
@@ -925,6 +1056,7 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// --- Export ---
 	case ExportRequested:
+		a.state = StateExporting
 		a.busy = true
 		a.statusMsg = "Exporting data..."
 		if msg.Ranked && a.currentRank != nil {
@@ -934,16 +1066,38 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, exportDatasetCmd(a, msg)
 
 	case ExportComplete:
+		a.state = StateIdle
 		a.busy = false
 		r := msg.Result
 		summary := fmt.Sprintf("Exported %d rows to %s (%s, %s)",
 			r.Rows, r.FileName, humanBytes(r.Size), r.Duration.Round(time.Millisecond))
 		a.appendLine(summary)
 		a.statusMsg = "Export complete"
+
+		// If triggered by NL intent, wrap result conversationally
+		if a.pendingIntent {
+			a.pendingIntent = false
+			a.appendLine(helpStyle.Render("[Generating conversational summary...]"))
+			wrapContent := fmt.Sprintf(
+				"The user asked me to export data. The export completed successfully: %s. Please confirm it's done in a conversational way.",
+				summary,
+			)
+			a.thread.Add(conversation.Message{
+				Role:    conversation.RoleSystem,
+				Content: wrapContent,
+			})
+			a.updateTokenCount()
+			return a, streamChatCmd(a.client, a.models, a.thread)
+		}
 		return a, nil
 
 	case ExportFailed:
+		a.state = StateIdle
 		a.busy = false
+		if a.pendingIntent {
+			a.pendingIntent = false
+			a.appendLine(helpStyle.Render(fmt.Sprintf("[Export failed: %v]", msg.Err)))
+		}
 		a.errMsg = fmt.Sprintf("Export failed: %v", msg.Err)
 		a.statusMsg = "Export failed"
 		return a, nil
@@ -1107,6 +1261,7 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// --- Streaming ---
 	case StreamStarted:
+		a.state = StateStreaming
 		a.streaming = true
 		a.currentStream = msg.Stream
 		a.streamModel = msg.Model
@@ -1128,6 +1283,7 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, readNextChunkCmd(a.currentStream, a.streamModel, &a.streamContent)
 
 	case StreamDone:
+		a.state = StateIdle
 		a.streaming = false
 		a.currentStream = nil
 		if a.streamCancel != nil {
@@ -1164,6 +1320,7 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case StreamError:
+		a.state = StateIdle
 		// Clean up the failed stream's context
 		if a.streamCancel != nil {
 			a.streamCancel()
@@ -1200,7 +1357,8 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// --- Keyboard input ---
 	case tea.KeyMsg:
 		// Handle y/n confirmation prompt
-		if a.awaitingYn {
+		if a.state == StateConfirming || a.awaitingYn {
+			a.state = StateIdle
 			a.awaitingYn = false
 			if msg.Type == tea.KeyRunes && len(msg.Runes) > 0 {
 				ch := msg.Runes[0]
@@ -1225,7 +1383,8 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Type == tea.KeyEscape {
 			a.clearSuggestions()
 			// Cancel LLM streaming
-			if a.streaming {
+			if a.state == StateStreaming || a.streaming {
+				a.state = StateIdle
 				a.streaming = false
 				if a.streamCancel != nil {
 					a.streamCancel()
@@ -1235,10 +1394,12 @@ func (a *Application) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				a.streamContent.Reset()
 			}
 			// Cancel RAG worker
-			if a.busy && a.ragClient != nil && a.ragClient.IsRunning() {
+			if (a.state != StateIdle || a.busy) && a.ragClient != nil && a.ragClient.IsRunning() {
 				a.ragClient.Stop()
 			}
+			a.state = StateIdle
 			a.busy = false
+			a.pendingIntent = false
 			a.statusMsg = "Cancelled"
 			a.input.Focus()
 			var cmd tea.Cmd
@@ -1694,13 +1855,41 @@ func (a *Application) View() string {
 	}
 
 	w := a.width
+	h := a.height
+
+	// For very small terminals, show a centered warning instead
+	if w < 60 || h < 16 {
+		warning := "Terminal too small. Minimum: 60x16."
+		if w < 60 {
+			warning = fmt.Sprintf("Terminal too narrow (%d cols). Minimum: 60 cols.", w)
+		}
+		if h < 16 {
+			warning = fmt.Sprintf("Terminal too short (%d rows). Minimum: 16 rows.", h)
+		}
+		if w < 60 && h < 16 {
+			warning = "Terminal too small. Minimum: 60x16."
+		}
+		return "\n\n" + lipgloss.Place(
+			w, h,
+			lipgloss.Center, lipgloss.Center,
+			errorStyle.Render(warning),
+		)
+	}
+
+	// Clamp dimensions for layout calculations
 	if w < 60 {
 		w = 60
 	}
-	h := a.height
-	if h < 20 {
-		h = 20
+	if h < 16 {
+		h = 16
 	}
+
+	// --- Responsive breakpoints ---
+	// narrow:  < 80 cols  (force single column, minimal chrome)
+	// medium:  80-119     (comfortable single column, show optional right panel)
+	// wide:    >= 120     (full layout, all features)
+	isNarrow := w < 80
+	isWide := w >= 120
 
 	// Status line text with spinner
 	statusText := a.statusMsg
@@ -1716,7 +1905,7 @@ func (a *Application) View() string {
 		errText = "  ! " + a.pongMsg
 	}
 
-	// --- Centered header: "[+] Mini Wiki | Project" ---
+	// --- Responsive header ---
 	projDir := ""
 	if a.pkb != nil {
 		projDir = a.pkb.ProjectDir()
@@ -1726,25 +1915,39 @@ func (a *Application) View() string {
 		parts := strings.Split(projDir, "/")
 		projectName = parts[len(parts)-1]
 	}
-	headerTitle := "[+] Mini Wiki"
-	if projectName != "" {
-		headerTitle += " | " + projectName
+
+	headerTitle := "[+]"
+	if !isNarrow {
+		headerTitle = "[+] Mini Wiki"
+		if projectName != "" {
+			headerTitle += " | " + projectName
+		}
 	}
-	if len(headerTitle) > w-4 {
-		headerTitle = headerTitle[:w-7] + "..."
+	maxHeaderLen := w - 4
+	if len(headerTitle) > maxHeaderLen {
+		headerTitle = headerTitle[:maxHeaderLen-3] + "..."
 	}
-	hPad := (w - len(headerTitle)) / 2
+	hPad := (w - lipgloss.Width(headerTitle)) / 2
 	if hPad < 0 {
 		hPad = 0
 	}
 	headerLine := headerStyle.Render(strings.Repeat(" ", hPad) + headerTitle)
 
-	// --- Status sub-header ---
+	// --- Responsive sub-header ---
 	subLine := ""
-	if errText != "" {
-		subLine = subHeaderStyle.Render(statusText + errText)
-	} else {
-		subLine = subHeaderStyle.Render(statusText + "  |  Tokens: " + fmt.Sprintf("%d", a.estimatedTokens))
+	if !isNarrow {
+		if errText != "" {
+			subLine = subHeaderStyle.Render(statusText + errText)
+		} else {
+			subLine = subHeaderStyle.Render(statusText + "  |  Tokens: " + fmt.Sprintf("%d", a.estimatedTokens))
+		}
+	} else if errText != "" {
+		// On narrow: show only errors in sub-header, minimal
+		truncErr := errText
+		if len(truncErr) > w-4 {
+			truncErr = truncErr[:w-7] + "..."
+		}
+		subLine = subHeaderStyle.Render(truncErr)
 	}
 
 	// Suggestion overlay (pops up above input)
@@ -1755,12 +1958,29 @@ func (a *Application) View() string {
 		suggestionText = suggestionStyle.Render(formatSuggestions(a.suggestions, a.tabIndex))
 	}
 
-	// Bottom bar: model name left, token info right, with border
+	// --- Responsive bottom bar ---
+	// On narrow: model name only. On wide: full info.
 	leftInfo := fmt.Sprintf(" %s ", a.models.Active())
-	rightInfo := fmt.Sprintf(" tokens: %d  |  models: %d ", a.estimatedTokens, len(a.models.Available()))
+	if isNarrow {
+		// Truncate model name if too long
+		modelMax := w/2 - 4
+		if modelMax < 8 {
+			modelMax = 8
+		}
+		if len(leftInfo) > modelMax {
+			leftInfo = leftInfo[:modelMax-3] + "..."
+		}
+	}
 
-	// Lay out left and right within available width
-	// Inner area = (w - 2) - 2 (border) - 2 (padding) = w - 6
+	var rightInfo string
+	if isWide {
+		rightInfo = fmt.Sprintf(" tokens: %d  |  models: %d ", a.estimatedTokens, len(a.models.Available()))
+	} else if !isNarrow {
+		rightInfo = fmt.Sprintf(" %d tok | %d models ", a.estimatedTokens, len(a.models.Available()))
+	} else {
+		rightInfo = ""
+	}
+
 	barContent := leftInfo
 	rightLen := lipgloss.Width(rightInfo)
 	leftLen := lipgloss.Width(leftInfo)
@@ -1773,24 +1993,35 @@ func (a *Application) View() string {
 	}
 	bottomBar := bottomBarStyle.Width(w - 2).Render(barContent)
 
-	// Layout with auto-expanding textarea:
-	// header(2) + \n(1) + sub(1) + \n(1) + panels(panelH) + \n(1) + input(inputH) + \n(1) + bar(1) = h
-	// panelH = h - 2 - 1 - 1 - 1 - 1 - inputH - 1 - 1 = h - inputH - 8
+	// Layout calculation:
+	// base: header(1) + \n(1) + panels(panelH) + \n(1) + input(inputH) + \n(1) + bar(1) = base(6) + panelH + inputH
+	// sub:   adds subLine(1) + \n(1) = 2 more
+	// suggestions: adds \n(1) + suggestionText(1) = 2 more (replacing the fixed \n with \n+suggestion+\n)
+	subLines := 0
+	if subLine != "" {
+		subLines = 2 // subLine + trailing \n
+	}
 	inputH := lipgloss.Height(a.input.View())
 	if inputH < 1 {
 		inputH = 1
 	}
-	if inputH > 8 {
-		inputH = 8
+	// Input max height proportional to terminal height (set in WindowSizeMsg handler)
+	maxInputH := a.input.MaxHeight
+	if maxInputH < 1 {
+		maxInputH = 8
 	}
-	panelH := h - inputH - 8 - overlayLines
+	if inputH > maxInputH {
+		inputH = maxInputH
+	}
+	baseOffset := 6 + subLines + overlayLines*2
+	panelH := h - inputH - baseOffset
 	if panelH < 3 {
 		panelH = 3
 	}
 
 	// Two panels: center (80%) + right (20%), or full width if panel hidden
 	rightW := 0
-	if a.showInfoPanel {
+	if a.showInfoPanel && !isNarrow {
 		rightW = w * 20 / 100
 		if rightW < 18 {
 			rightW = 18
@@ -1803,7 +2034,7 @@ func (a *Application) View() string {
 	centerRendered := centerSty.Width(centerW).Height(panelH - 2).Render(chatContent)
 
 	var panelsRow string
-	if a.showInfoPanel {
+	if a.showInfoPanel && !isNarrow {
 		a.rightViewport.Height = panelH - 2
 		infoContent := a.renderInfoPanel(rightW)
 		rightSty := panelRightStyle
@@ -1828,8 +2059,10 @@ func (a *Application) View() string {
 	var b strings.Builder
 	b.WriteString(headerLine)
 	b.WriteString("\n")
-	b.WriteString(subLine)
-	b.WriteString("\n")
+	if subLine != "" {
+		b.WriteString(subLine)
+		b.WriteString("\n")
+	}
 	b.WriteString(panelsRow)
 	if suggestionText != "" {
 		b.WriteString("\n")
@@ -1853,10 +2086,18 @@ const welcomeLogo = ` _       _       _       _       _
                                     
        mini-wiki v2.0
    Your local AI research assistant
-                                     
+                                    
 /rank - Agentic ranking (fast)
 /scan - Index project files
 /help - All commands`
+
+// compactLogo is a smaller logo for narrow terminals.
+const compactLogo = ` _  _  _  _  _
+|_||_||_||_||_|
+  |  |  |  |  |
+               
+mini-wiki v2.0
+/help for cmds`
 
 func (a *Application) renderChatPanel(width, totalHeight int) string {
 	var content strings.Builder
@@ -1870,7 +2111,12 @@ func (a *Application) renderChatPanel(width, totalHeight int) string {
 	a.viewport.Height = vpHeight
 
 	if a.showWelcome {
-		logoLines := strings.Split(welcomeLogo, "\n")
+		// Responsive logo: use compact version on narrow panels
+		logo := welcomeLogo
+		if width < 50 {
+			logo = compactLogo
+		}
+		logoLines := strings.Split(logo, "\n")
 		visible := logoLines
 		if len(visible) > vpHeight {
 			visible = visible[:vpHeight]

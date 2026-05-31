@@ -6,10 +6,13 @@ A terminal-based AI research assistant for dataset analysis — fully local, no 
 **Visualize** with ASCII charts → **Export** to Excel/CSV/JSON. Everything runs offline on your GPU.
 
 **Key Features:**
+- **Natural Language Commands** — Say "find rows about X" instead of `/rank X`, "chart column Y" instead of `/chart bar column=Y`. The LLM detects your intent automatically.
 - **Agentic Ranking** — LLM writes Pandas code to rank/filter datasets. One LLM call, not 92K.
 - **Agentic Query** — Ask questions about your data in natural language. Gets exact Pandas-powered answers.
 - **Deep RAG** — gemma4 reads each retrieved chunk like a human researcher for richer answers.
-- **Auto-expanding input** — Textarea grows as you type. Alt+Enter for newlines.
+- **Proactive Assistant** — After ingesting data, automatically analyzes and summarizes your dataset.
+- **Responsive TUI** — Adapts to terminal size (60-79 narrow, 80-119 medium, 120+ wide). Auto-hides panels on small screens.
+- **Auto-expanding input** — Textarea grows as you type (proportional to terminal height). Alt+Enter for newlines.
 - **5-container TUI** — Isolated panels: chat, input, right panel, header, footer. Independent scrolling.
 
 ---
@@ -75,9 +78,9 @@ cp wiki ~/.local/bin/wiki
 
 ```
 1. /ingest @dataset.csv         # Parse file (< 1 second) — ready for /rank
-2. /rank "research topic"       # Agentic AI ranking (seconds, not hours)
+2. "find rows about X"          # NL intent → auto ranks by topic
 3. Type a question              # Auto Agentic Query + Deep RAG answer
-4. /chart bar column=score      # Visualize results
+4. "chart the score column"     # NL intent → auto generates chart
 5. /export --ranked              # Export to Excel with relevance scores
 6. /embed [--deep]               # (Optional) Index for RAG chat with deep reading
 ```
@@ -119,7 +122,6 @@ Go TUI: display ranked table
 | **gemma4:e4b** | 9.6 GB | Default chat (thinking enabled, 131K ctx) | `/model gemma4:e4b` |
 | **qwen2.5-coder:7b** | 4.7 GB | Code generation for Agentic Ranking | `/model qwen2.5-coder:7b` |
 | **deepseek-r1:8b** | 5.2 GB | Deep reasoning (slower) | `/model deepseek-r1:8b` |
-| **gemma4:e4b** | 9.6 GB | Logic-heavy tasks | `/model gemma4:e4b` |
 | **nomic-embed-text** | 274 MB | Required for `/embed` | *(auto-used)* |
 | **all-minilm** | 45 MB | Lightweight embeddings (fallback) | *(auto-used)* |
 
@@ -149,7 +151,24 @@ Cycle: **scroll → click → select → type → scroll → ...**
 |---|---|
 | **Enter** | Submit message |
 | **Alt+Enter** | Insert newline in message (multi-line input) |
-| **Input box** | Auto-expands vertically as you type (up to 8 lines) |
+| **Input box** | Auto-expands vertically as you type (proportional to terminal height, max 25%) |
+
+---
+
+## Natural Language Commands (Phase 8)
+
+Instead of memorizing slash commands, just talk naturally. The system detects your intent:
+
+| You say | What happens |
+|---|---|
+| "find rows about machine learning" | Auto-runs `/rank machine learning` |
+| "show me a pie chart of categories" | Auto-runs `/chart pie column=categories` |
+| "save these results as CSV" | Auto-runs `/export --format csv` |
+| "what data do I have loaded?" | Shows dataset info |
+| "load the data.csv file" | Auto-runs `/ingest @data.csv` |
+| "remove rows below 0.5" | Auto-runs `/discard 0.5` |
+
+All existing `/slash` commands still work. NL intent detection runs in parallel — if it detects a tool, it executes it and wraps the result conversationally.
 
 ---
 
@@ -236,7 +255,25 @@ Cycle: **scroll → click → select → type → scroll → ...**
 
 ## Feature Overview
 
-### Agentic Ranking (Key Feature)
+### Natural Language Intent Detection (Phase 8)
+- **LLM-based intent classification**: Before every chat response, a fast non-streaming LLM call classifies your intent
+- **Tool dispatch**: If intent is "rank", "chart", "export", etc., the tool runs automatically
+- **Conversational wrapping**: Tool results are fed back to the LLM, which explains them conversationally
+- **Fallback**: If no tool matches, standard RAG + Agentic Query flow runs unchanged
+
+### AppState Management (Phase 8)
+- Explicit Bubble Tea states: `StateIdle`, `StateStreaming`, `StateSearching`, `StateRanking`, `StateCharting`, `StateExporting`, `StateIngesting`, `StateConfirming`
+- Replaces boolean flag soup for clear cognitive boundaries
+
+### Responsive TUI Layout (Phase 8b)
+- **Narrow mode** (< 80 cols): Single column, compact header `[+]`, no sub-header, model name only in footer, right panel auto-hidden
+- **Medium mode** (80-119): Full header, abbreviated footer, right panel optional
+- **Wide mode** (>= 120): Full header, detailed footer, full layout
+- **Proportional input**: Max height = 25% of terminal height (clamped 3-12)
+- **Compact welcome logo**: 4-line logo on narrow panels
+- **Minimum terminal**: 60x16 (was 80x24)
+
+### Agentic Ranking
 - `/rank` sends the **schema only** (not the data) to `qwen2.5-coder:7b`
 - LLM writes a **Pandas filter script** — executed locally, sandboxed
 - **O(1) LLM calls** regardless of dataset size
@@ -244,11 +281,14 @@ Cycle: **scroll → click → select → type → scroll → ...**
 - `/compare` for iterative refinement with visual deltas
 - `/discard` to remove low-relevance rows with preview
 
+### Proactive Assistant
+- After `/ingest`: auto-triggers Agentic Query to summarize the dataset
+- After `/rank`: offering next steps conversationally
+
 ### RAG Knowledge Base
 - `/ingest` parses files and registers them instantly — no Python worker needed for `/rank`
 - `/embed` indexes chunks for semantic search (optional, runs in background with live progress)
-- Chunk size: 4000 characters with 400 overlap (5x fewer chunks than default)
-- Metadata-aware: column headers preserved in context
+- Chunk size: 4000 characters with 400 overlap
 - ChromaDB per project (`.wiki/rag/`)
 
 ### Data Visualization
@@ -257,7 +297,7 @@ Cycle: **scroll → click → select → type → scroll → ...**
 - Export to PNG/SVG with `--export` flag
 
 ### Smart Export
-- Excel (`.xlsx`), CSV, JSON
+- Excel (`.xlsx`), CSV, JSON, Markdown
 - `--ranked` flag includes `relevance_score` column
 - Formula injection protection
 - Auto-column width and type formatting
@@ -267,14 +307,40 @@ Cycle: **scroll → click → select → type → scroll → ...**
 - Supports: CSV, TSV, JSONL, NDJSON, JSON arrays, XLSX, TXT, MD
 
 ### Text Selection
-- Click-drag anywhere in the TUI → auto-copy to clipboard
-- Selected lines are **highlighted** visually
+- Click-drag anywhere in the TUI → native terminal selection
 - `/clip` command copies entire viewport
 
 ### Man-Page Help System
 - `/help` shows a summary (like `command --help`)
 - `/help <command>` shows full man page for that command
 - Every man page includes: NAME, SYNOPSIS, DESCRIPTION, BEHAVIOR, EXAMPLE, SEE ALSO
+
+---
+
+## Test Coverage
+
+18 test suites, 340+ tests, ~50% overall coverage.
+
+| Package | Coverage | Status |
+|---------|----------|--------|
+| modelmgr | **100%** | Full |
+| wiki (errors) | **100%** | Full |
+| conversation | **94.4%** | Near-full |
+| dataset | **92.9%** | Near-full |
+| config | **91.7%** | Near-full |
+| memory | **90.4%** | Near-full |
+| export | **88.9%** | Near-full |
+| kb | **86.6%** | Near-full |
+| projectkb | **86.1%** | Near-full |
+| jsonlparser | **86.8%** | Near-full |
+| chart | **82.8%** | Good |
+| ranking | **77.5%** | Good |
+| fileref | **75.2%** | Good |
+| filescanner | **72.8%** | Good |
+| csvparser | **71.7%** | Good |
+| ollama | **65.9%** | Moderate |
+| app (TUI) | **11.3%** | Helpers + commands |
+| rag (protocol) | **7.7%** | Types only |
 
 ---
 
@@ -306,7 +372,10 @@ mini_wiki_2.0/
     querier.py                     # RAG query pipeline + call_llm()
     requirements.txt
   internal/
-    app/app.go                     # Bubbletea TUI (model, update, view)
+    app/
+      app.go                       # Bubbletea TUI (model, update, view)
+      intent.go                    # Phase 8: Tool definitions, intent classification, dispatch
+      intent_test.go               # Phase 8: 14 tests for intent detection
     chart/chart.go                 # 7 ASCII chart types + PNG export
     config/manager.go              # YAML config (~/.config/mini-wiki/)
     conversation/types.go          # Message & thread types
@@ -338,9 +407,10 @@ mini_wiki_2.0/
 | `/rank says "RAG worker unavailable"` | Try `/embed` first (needed for the Python worker) |
 | `/ingest or /embed hangs` | Press **Escape** to cancel |
 | Text selection in full-screen | Click-drag to select, release to auto-copy. Or `/clip` |
-| Layout broken | Resize terminal to at least 80x24 |
+| Layout broken | Resize terminal to at least 60x16 |
 | Model not listed in `/models` | Run `/refresh` |
 | Slow /embed | Increase chunk size or use a smaller dataset. Press Escape to cancel |
+| NL intent not triggering tools | Make sure your active chat model supports function-calling-like behavior |
 
 ---
 

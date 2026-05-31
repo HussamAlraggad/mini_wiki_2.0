@@ -580,10 +580,73 @@ If terminal is too narrow (< 40 cols), show: `Terminal too narrow for chart disp
 
 ### Phase 7: Remaining Features (COMPLETE)
 
+**Package:** `internal/app/`
+
 **Deliverables:**
+
 - [x] `/wizard` command (interactive setup)
 - [x] Enhanced export: Markdown
 - [x] OS detection + automatic dependency installer
+
+### Phase 8: Conversational AI Assistant (COMPLETE)
+
+**Package:** `internal/app/intent.go`, `internal/app/intent_test.go`
+
+**Architecture:** Intent detection via non-streaming LLM call with tool dispatch. The active chat model classifies natural language messages into tool calls, dispatches to existing handlers, and wraps results conversationally.
+
+**Deliverables:**
+
+- [x] `AppState` enum for clear state boundaries
+- [x] Tool definitions (rank, chart, export, discard, dataset_info, ingest)
+- [x] `classifyIntent()` — fast non-streaming LLM classification
+- [x] `parseToolCall()` — JSON parsing with fence handling
+- [x] `executeIntent()` — dispatch to existing command handlers
+- [x] Conversational wrapping of tool results
+- [x] Chat-first layout (right panel hidden by default)
+- [x] Proactive after-ingest analysis
+- [x] 14 unit tests
+
+### Phase 8b: Responsive TUI Layout (COMPLETE)
+
+Applied responsive web design principles to the terminal UI. Three breakpoints adapt layout to terminal size.
+
+**Responsive breakpoints:**
+
+| Mode | Width | Layout | Header | Footer | Right Panel |
+|------|-------|--------|--------|--------|-------------|
+| Narrow | < 80 cols | Single column | Compact `[+]` | Model name only | Auto-hidden |
+| Medium | 80-119 | Single column | Full name | Abbreviated info | Optional |
+| Wide | >= 120 | Full layout | Full name | Full info | Optional |
+
+**Changes:**
+- `WindowSizeMsg`: auto-hide right panel when < 80, proportional input `MaxHeight = h/4` (clamped 3-12)
+- `renderChatPanel()`: compact 4-line logo when panel < 50 chars wide
+- Minimum terminal: 60x16 (was 80x24). Shows centered error below that.
+- Sub-header hidden on narrow (saves 2 rows). Footer abbreviated.
+- `compactLogo` constant for narrow welcome screen
+- [x] `/wizard` command (interactive setup)
+- [x] Enhanced export: Markdown
+- [x] OS detection + automatic dependency installer
+
+### Phase 8: Conversational AI Assistant (COMPLETE)
+
+**Package:** `internal/app/intent.go`, `internal/app/intent_test.go`
+
+**Architecture:** Intent detection via non-streaming LLM call with tool dispatch.
+
+**Design Decision (Option A):** Uses the active chat model for intent classification (not a dedicated small model). Rationale: model already loaded in VRAM, no swap penalty, has conversational context.
+
+**Deliverables:**
+- [x] `AppState` enum: `StateIdle, StateStreaming, StateSearching, StateRanking, StateCharting, StateExporting, StateIngesting, StateConfirming`
+- [x] Tool definitions in `internal/app/intent.go`: rank, chart, export, discard, dataset_info, ingest
+- [x] `classifyIntent()` — non-streaming LLM call with JSON classification prompt
+- [x] `parseToolCall()` — JSON parser with markdown fence handling, tool validation
+- [x] `executeIntent()` — dispatches to existing command handlers
+- [x] Conversational wrapping: tool results fed back to LLM for natural response
+- [x] Chat-first layout: right panel hidden by default, `/panel` toggles
+- [x] Proactive assistant: auto-analyze after `/ingest`
+- [x] 14 unit tests for intent.go
+- [x] All existing slash commands unchanged
 
 ---
 
@@ -776,6 +839,12 @@ func AutoDetect(path string) Parser { ... }
 
 ### 12.1 Existing Commands (DO NOT MODIFY without explicit request)
 
+Additionally, all commands can now be invoked via **natural language** — the system detects intent and dispatches automatically. For example:
+- "find rows about machine learning" → `/rank machine learning`
+- "show me a pie chart" → `/chart pie`
+- "save as CSV" → `/export --format csv`
+- "what data do I have loaded?" → dataset info summary
+
 | Command | Syntax | Description | Package |
 |---|---|---|---|
 | `/help` | `/help` | Show all available commands | `internal/app/` |
@@ -837,6 +906,8 @@ mini_wiki_2.0/
   internal/
     app/
       app.go                       # Bubbletea TUI (main model, update, view)
+      intent.go                    # Phase 8: Tool definitions, intent classification, tool dispatch
+      intent_test.go               # Phase 8: 14 tests for intent detection
     config/
       manager.go                   # Config persistence (YAML)
       manager_test.go
