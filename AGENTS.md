@@ -1,195 +1,153 @@
-# AI Agent Operating Instructions
+# AGENTS.md
 
-> This file is the **operating manual** for AI agents on this project.
-> It defines how to read the project, how to work, and how to hand off.
->
-> Three files form the handoff system:
->   - `AGENTS.md` (this file) -- operating rules
->   - `plan.md` -- the specification (what to build)
->   - `journal.md` -- the state (where we are, what broke)
+Operating manual for AI agents on **mini-wiki** — a local-only TUI AI research assistant (Go + Bubbletea + Ollama).
 
----
-## Identity & Role
+## Handoff docs (read in this order)
 
-**You are a Development Orchestrator & Full-Stack Builder.**
+1. **`journal.md`** — current state, last session's handoff, known issues
+2. **`plan.md`** — the spec (what to build, contracts, design rules). If journal.md contradicts, plan.md wins.
+3. **`AGENTS.md`** (this file) — operating rules
 
-You are the right hand of the programmer for building the **Local AI Research TUI**. You operate autonomously to design, implement, test, and refine every layer of this system — from the Go TUI frontend to the Python data engine, from the Ollama integration to the IPC plumbing. You are expected to coordinate specialized sub-agents (security, database, API, code review, testing, performance, documentation, DevOps) as needed, but the final decision-making and integration are yours.
+## Commands
 
----
-
-## Your Musts (Non-Negotiable Rules)
-
-1. **Local Execution Only.** Zero reliance on external APIs. Every LLM inference, every data process, every file read must happen on the local machine. No cloud, no SaaS, no remote endpoints.
-2. **Parameter Cap Strict.** Every model used must be ≤10B parameters. No exceptions. Verify model sizes before writing any config or deployment script.
-3. **Ollama for AI.** All LLM serving must go through Ollama. No direct llama.cpp, no OpenAI-compatible wrappers that reach outside.
-4. **Strict Execution Sandbox.** LLM-generated Python code must run in an isolated `subprocess` with strict timeouts. No `exec()` or `eval()` in the main process. No blind execution.
-5. **Context Window Discipline.** Never pass full datasets into the LLM context. Only send schemas + small samples (max 5 rows). Full datasets go through Pandas, not through the LLM.
-6. **Error Recovery.** If generated Python code has syntax errors, the system must self-correct by feeding the traceback back to `qwen2.5-coder` for a maximum of 2 retry attempts.
-7. **Dependency Isolation.** The Python environment must use `venv` or `conda`. No system-level package pollution.
-8. **State Management.** The TUI must use distinct Bubble Tea states (e.g., `StateFileSelect`, `StateCleaning`, `StateChat`) to maintain clear cognitive boundaries for the user.
-9. **Multi-Format Support.** Must handle CSV, JSON, XLSX, and Parquet files seamlessly.
-10. **Document Everything.** Every design decision, every failure, every milestone status must be logged in `JOURNAL.md`. Installation steps must be in `README.md`. The plan must live in `PLAN.md`.
-11. **Full tools usage.** Every tool available for you is a valuable assets, espcially the "asking questions" tool, this a HUGE MUST USE TOOL and explaing the question in details so I can answer PROPERLY.
-
----
-
-## Your No-Nos (Hard Prohibitions)
-
-1. **❌ No External API Calls.** No OpenAI, Anthropic, Google Cloud AI, or any remote inference. If it requires an API key or a URL, it's forbidden.
-2. **❌ No Models Over 10B.** Never pull, configure, or recommend a model larger than 10 billion parameters.
-3. **❌ No Passing Full Datasets to LLM.** Never put raw full-data CSVs or DataFrames into the LLM prompt. Only schema + 5-row samples.
-4. **❌ No Unrestricted Code Execution.** Never run LLM-generated code without a `subprocess` sandbox with timeout. Never use `exec()` or `eval()` in the Go or Python main process.
-5. **❌ No System Python Pollution.** Never install Python packages globally. Always use `venv`.
-6. **❌ No Silent Failures.** Every error must be surfaced to the user in the TUI. No silent crashes, no swallowed tracebacks.
-7. **❌ No Hardcoded Paths.** All file/directory paths must be configurable or relative to the project root.
-8. **❌ No Skipping Tests.** Every pipeline must have tests. No feature is complete without a test.
-9. **❌ No Skipping Security Review.** Authentication (if any), input validation, and sandboxing must be reviewed before merging.
-10. **❌ No Premature Optimization.** Build correct first, then profile, then optimize. Do not add complexity before it's needed.
-
----
-
-## Limitations & Restrictions
-
-- **Hardware Ceiling:** The system must run on an RTX 4060 / 5060 with 8 GB VRAM. If a feature would exceed this, it must be redesigned or dropped.
-- **Model Quantization:** All models must be quantized (Q5 or Q6 recommended) to fit within VRAM while preserving reasoning quality.
-- **Context Window:** Realistic usable context is ~4K–8K tokens given the 8B model size and VRAM constraints -keep the 10B models in mind-.
-- **Single Machine.** No distributed processing. No multi-node. One machine, one GPU.
-- **Linux-Only.** The target OS is Linux (Ubuntu/Pop!_OS). macOS development is OK but deployment targets Linux. Windows/WSL is not a primary target.
-- **No Real-Time Streaming.** The TUI can show progress spinners and async loading, but you cannot assume sub-second LLM response times. Expect 2–15 seconds per LLM call.
-- **No GUI.** Terminal only. No Electron, no web UI, no Flutter. The entire interface is a terminal.
-- **Single-User.** The TUI is designed for one user at a time at the terminal. No multi-user, no session persistence across logins.
-
----
-
-## Operational Directives
-
-- **Phase 1 — Design:** Call security, API, database, and DevOps agents in parallel before writing code.
-- **Phase 2 — Synthesize:** Combine all agent feedback into a unified design.
-- **Phase 3 — Implement:** Build the solution, integrating all feedback.
-- **Phase 4 — Quality:** Run code review, test generation, documentation, and performance analysis in parallel.
-- **Phase 5 — Verify:** Ensure all feedback is incorporated. Update `JOURNAL.md` with status.
-- **Phase 6 — Deliver:** Return a complete, tested, documented solution.
-
-Always be proactive. Call sub-agents when relevant. Never skip quality gates. Document every decision. Log every milestone.
-
----
-
-*This is your constitution. When in doubt, return here, and ask your superior.*
-
-## 1. Reading Order (MANDATORY)
-
-Every agent **MUST** read these files in this exact order at the start of their session:
-
-1. **`journal.md`** first -- understand the current state, last agent's handoff, known issues.
-2. **`plan.md`** second -- understand what to build, the exact specs, and the inter-phase contracts.
-3. **`AGENTS.md`** (this file) third -- understand the operating rules.
-
-**Never skip any of these three files.** If you skip, you will make incorrect assumptions.
-
----
-
-## 2. The Three Pillars of Handoff
-
-### plan.md (The Spec)
-- Describes what the tool does and how it works.
-- Contains exact command syntax, behavior, edge cases, error messages.
-- **Section 12 (Phase Interop Contracts)** defines the Go types and interfaces that all phases
-  must share. If you are implementing a PLANNED phase, you MUST read section 12 first and
-  conform your code to those contracts.
-- If a detail is missing or ambiguous, do NOT guess -- stop and ask.
-
-### journal.md (The State)
-- Tells you where the project is right now: what phase, what's working, what's broken.
-- The `Current Project State` table at the top is your starting context.
-- The `Handoff Notes` section contains critical context from the previous agent.
-- The `Known Issues & Workarounds` table documents every problem and its resolution.
-- After your session, you will append a new entry at the top of the journal.
-
-### AGENTS.md (The Rules -- this file)
-- How to operate, what to read, what to write, how to hand off.
-
----
-
-## 3. Workflow Rules
-
-### 3.1 Before You Start
-1. Read journal.md, plan.md, AGENTS.md (in that order).
-2. Run `go build -o wiki .` to confirm the binary builds.
-3. Run `go test ./...` to confirm tests are green.
-4. Run `go vet ./...` to confirm no warnings.
-
-### 3.2 While Working
-- NEVER add features, commands, UI elements, or packages not documented in plan.md.
-- NEVER use emojis, icons, bright colors, or animations (see plan.md section 4).
-- NEVER modify code in COMPLETE phases unless explicitly asked.
-- NEVER touch deprecated packages (webfetch, srs) -- they are kept for reference only.
-- ALWAYS use the types and interfaces from plan.md section 12 (Phase Interop Contracts).
-- ALWAYS write tests for new code (see plan.md section 16 for requirements).
-- ALWAYS update `journal.md` before finishing your session.
-
-### 3.3 When in Doubt
-- If something in plan.md is ambiguous: **ask** (do not guess).
-- If something in journal.md contradicts plan.md: **plan.md wins** -- flag the contradiction.
-- If you break something: **document it** in the "What I struggled with / broke" section of your journal entry.
-
----
-
-## 4. Phase Status Definitions
-
-Each phase in the Development Roadmap (plan.md section 11) has one of these statuses:
-
-| Status | Meaning |
+| What | How |
 |---|---|
-| `COMPLETE` | Fully implemented, tested, and working. Do NOT modify without explicit request. |
-| `PLANNED` | Not yet started. The spec exists in plan.md. The interop contracts are defined. |
-| `INPROGRESS` | Currently being worked on. Check journal.md for who, what, and status. |
+| Build | `go build -o wiki .` |
+| All tests | `go test ./...` |
+| Single pkg | `go test ./internal/ranking/...` |
+| Verbose | `go test -v ./...` |
+| Race detect | `go test -race ./...` |
+| Vet | `go vet ./...` |
+| Setup deps | `bash setup.sh` |
+| Run | `./wiki` (or global `wiki`) |
 
----
+No CI workflows, no Makefile, no `.golangci.yml`. Plain Go project.
 
-## 5. Handoff Protocol
+## Project state
 
-Every agent **MUST** end their session by appending a new entry at the **top** of `journal.md`
-(above the previous entries). The entry must follow this exact format:
+**All 7 phases are COMPLETE** (Foundation, File Ingestion, RAG KB, Ranking, Charts, Export, Wizard). The project is feature-complete per plan.md. Every phase entry in plan.md section 11 is marked COMPLETE.
+
+Phases are defined in plan.md section 11 with interop contracts in section 12. Do NOT modify COMPLETE phases without explicit request.
+
+## What to know before editing
+
+- **Error types**: Use `wiki.New(kind, msg)` / `wiki.Wrap(kind, msg, cause)` from `internal/wiki/errors.go`. 26 Kind constants with predicates (`IsConnection`, `IsTimeout`, etc.). Do NOT create raw errors.
+- **Shared data types**: `internal/dataset/` defines `Dataset`, `Row`, `Column`, `ColumnKind`. All packages must import these — never define your own row/column types.
+- **AppState**: Bubbletea states in `internal/app/app.go` — `StateIdle`, `StateStreaming`, `StateSearching`, `StateRanking`, `StateCharting`, `StateExporting`, `StateIngesting`, `StateConfirming`.
+- **Intent detection** for NL commands lives in `internal/app/intent.go`. Tools defined there (rank, chart, export, discard, dataset_info, ingest).
+- **Python RAG worker** (`rag_worker/*.py`) is embedded via `//go:embed rag_worker/*.py rag_worker/*.txt` in `main.go`. Extracted to a temp dir at runtime. Protocol: JSON-over-stdin/stdout between Go and Python subprocess.
+- **`.venv/`** is project-local (gitignored), symlinked to `~/.config/mini-wiki/.venv` for global access. Go binary checks `.venv/bin/python3` first, then system python3, then python.
+- **Ollama**: hardcoded to `127.0.0.1:11434` (not `localhost` — DNS rebinding protection). Context timeouts: 30s chat, 5s ping. Auto-started unless `--no-start` flag.
+- **Per-project state**: `$CWD/.wiki/`. Global config: `~/.config/mini-wiki/`.
+- **Deprecated packages** (do NOT touch): `internal/srs/`, `internal/webfetch/`. Kept for reference only.
+- **Known bug** (csvparser): `detectType` is dead code — `updateColumnTypes` skips it (line 293 `if columns[i].Type == ColumnString { continue }`). Type narrowing never executes.
+
+## Design rules (strict)
+
+- **No emojis** anywhere — not in code, comments, UI, or commits
+- **No icons** — no Unicode pictograms, no ASCII art except the welcome logo
+- **Colors** — no restriction. Use any palette that serves the UI.
+- **Only loading animation**: Bubbletea `spinner.Dot` model during LLM stream, ingestion, or ops >1s
+- **5-container layout**: Header (D), Chat (A), Right Panel (C), Input (B), Footer (E). Responsive breakpoints at <80, 80-119, >=120 cols. Min terminal: 60x16.
+- **Mouse**: Left-click disables mouse tracking (native text selection). Typing re-enables it.
+
+## Mistake-driven rules
+
+Every mistake or struggle discovered during a session must produce two artifacts:
+1. **A rule** in this file (AGENTS.md) — a concise guardrail that prevents the same mistake or aids recovery if it repeats. Add it under the relevant section or as a new bullet.
+2. **A log entry** — detail the mistake in journal.md under either:
+   - "What I struggled with / broke" (session entry section)
+   - "Known Issues & Workarounds" table (for unresolved or recurring problems)
+
+This is recursive: if you forget to add the rule, that itself is a mistake and must generate another rule.
+
+## Before you start
+
+```bash
+go build -o wiki .   # confirm build
+go test ./...        # confirm all green
+go vet ./...         # confirm no warnings
+```
+
+## Before marking a phase COMPLETE
+
+1. `go build -o wiki .` succeeds
+2. `go test ./...` passes
+3. `go vet ./...` no warnings
+4. Update `journal.md` with your session entry at the top
+5. Add any new package dirs to plan.md section 14
+
+## End-of-session handoff
+
+Append a new entry at the **top** of `journal.md`. Format:
 
 ```markdown
-## <Date> -- <Phase Name> (<STATUS>)
+## <Date> -- <Phase> (<STATUS>)
 
 ### What was done
-- bullet list of actual accomplishments
+- bullet list
 
 ### Interface changes made
-- list any changes to types, interfaces, or contracts defined in plan.md section 12
-- if none, write: "None"
+- changes to plan.md section 12 types/interfaces, or "None"
 
 ### What I struggled with / broke
-- honest list: bugs introduced and fixed, design mistakes, edge cases discovered
-- specific file/line references for anything tricky
+- honest, with file/line references for tricky parts
 
 ### Test status
 ```
-(output of `go test ./...`)
+go test ./... output
 ```
 
 ### Handoff to next agent
-- what the next agent needs to know before they start
-- any unfinished work, known limitations, design decisions
-- exact files and line numbers for anything non-obvious
+- what they need to know, unfinished work, exact file/line references
 ```
 
-**Requirements:**
-- Do NOT delete or modify historical journal entries (append only).
-- The "What I struggled with / broke" section is mandatory -- even if it's embarrassing.
-- The "Handoff to next agent" section is mandatory -- even if you think everything is obvious.
-- If you found a workaround for a system issue, add it to the `Known Issues & Workarounds` table.
+Do not delete or modify historical journal entries (append only).
 
----
+<!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:7510c1e2 -->
+## Beads Issue Tracker
 
-## 6. Pre-Commit Checklist (Before Marking a Phase COMPLETE)
+This project uses **bd (beads)** for issue tracking. Run `bd prime` to see full workflow context and commands.
 
-1. [ ] `go build -o wiki .` succeeds with no errors
-2. [ ] `go test ./...` passes all tests
-3. [ ] `go vet ./...` produces no warnings
-4. [ ] `journal.md` updated with your session entry (at the top)
-5. [ ] `journal.md` handoff section written
-6. [ ] Any new package directories added to `plan.md` section 14 (Project File Structure)
-7. [ ] All new public types and functions have comments
+### Quick Reference
+
+```bash
+bd ready              # Find available work
+bd show <id>          # View issue details
+bd update <id> --claim  # Claim work
+bd close <id>         # Complete work
+```
+
+### Rules
+
+- Use `bd` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists
+- Run `bd prime` for detailed command reference and session close protocol
+- Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files
+
+**Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md for details and anti-patterns.
+
+## Session Completion
+
+**When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
+
+**MANDATORY WORKFLOW:**
+
+1. **File issues for remaining work** - Create issues for anything that needs follow-up
+2. **Run quality gates** (if code changed) - Tests, linters, builds
+3. **Update issue status** - Close finished work, update in-progress items
+4. **PUSH TO REMOTE** - This is MANDATORY:
+   ```bash
+   git pull --rebase
+   git push
+   git status  # MUST show "up to date with origin"
+   ```
+5. **Clean up** - Clear stashes, prune remote branches
+6. **Verify** - All changes committed AND pushed
+7. **Hand off** - Provide context for next session
+
+**CRITICAL RULES:**
+- Work is NOT complete until `git push` succeeds
+- NEVER stop before pushing - that leaves work stranded locally
+- NEVER say "ready to push when you are" - YOU must push
+- If push fails, resolve and retry until it succeeds
+<!-- END BEADS INTEGRATION -->
