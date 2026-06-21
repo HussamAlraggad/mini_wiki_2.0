@@ -42,12 +42,16 @@ Phases are defined in plan.md section 11 with interop contracts in section 12. D
 - **Deprecated packages** (do NOT touch): `internal/srs/`, `internal/webfetch/`. Kept for reference only.
 - **Known bug** (csvparser): `detectType` is dead code — `updateColumnTypes` skips it (line 293 `if columns[i].Type == ColumnString { continue }`). Type narrowing never executes.
 
+## Document management
+
+- **AI-generated planning documents** (e.g., `PLAN.md`, `ARCHITECTURE.md`) MUST be stored in the `history/` directory to keep the repo root clean. Only hand-maintained files like `journal.md` and `AGENTS.md` live at the root.
+
 ## Design rules (strict)
 
 - **No emojis** anywhere — not in code, comments, UI, or commits
 - **No icons** — no Unicode pictograms, no ASCII art except the welcome logo
 - **Colors** — no restriction. Use any palette that serves the UI.
-- **Only loading animation**: Bubbletea `spinner.Dot` model during LLM stream, ingestion, or ops >1s
+- **Loading animation**: Bubbletea `spinner.Dot` model during LLM stream, ingestion, or ops >1s. Other animations OK where they add value — no gratuitous or distracting motion.
 - **5-container layout**: Header (D), Chat (A), Right Panel (C), Input (B), Footer (E). Responsive breakpoints at <80, 80-119, >=120 cols. Min terminal: 60x16.
 - **Mouse**: Left-click disables mouse tracking (native text selection). Typing re-enables it.
 
