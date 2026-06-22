@@ -27,6 +27,10 @@ Thumbs.db
 .wiki/
 rag_worker/__pycache__/
 
+# TUI build output
+wiki-tui/dist/
+wiki-tui/node_modules/
+
 # Beads / Dolt files (added by bd init)
 .dolt/
 *.db

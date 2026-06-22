@@ -9,7 +9,25 @@ echo "=== mini-wiki Setup ==="
 echo ""
 
 # --- Check Python ---
-echo "[1/5] Checking Python..."
+echo "[1/6] Checking system dependencies..."
+
+# Install Tesseract OCR (needed for scanned document support)
+if command -v apt &>/dev/null; then
+    echo "  Installing Tesseract OCR..."
+    sudo apt-get install -y tesseract-ocr poppler-utils 2>/dev/null || true
+elif command -v brew &>/dev/null; then
+    echo "  Installing Tesseract OCR..."
+    brew install tesseract poppler 2>/dev/null || true
+elif command -v pacman &>/dev/null; then
+    echo "  Installing Tesseract OCR..."
+    sudo pacman -S --noconfirm tesseract poppler 2>/dev/null || true
+else
+    echo "  Warning: Could not install Tesseract OCR automatically."
+    echo "  Install manually for scanned document support."
+fi
+echo ""
+
+echo "[2/6] Checking Python..."
 PYTHON=""
 if command -v python3 &>/dev/null; then
     PYTHON=python3
@@ -66,11 +84,11 @@ else
 fi
 
 # Install the packages
-echo "  Installing chromadb, ollama, unstructured, pypdf..."
-if $PIP install chromadb ollama unstructured pypdf 2>&1 | grep -q "externally-managed"; then
-    echo "  Detected externally-managed environment. Using --break-system-packages..."
-    $PIP install --break-system-packages chromadb ollama unstructured pypdf
-fi
+echo "  Installing packages from requirements.txt..."
+$PIP install -r rag_worker/requirements.txt 2>&1 | tail -3 || {
+    echo "  Trying with --break-system-packages..."
+    $PIP install --break-system-packages -r rag_worker/requirements.txt 2>&1 | tail -3
+}
 echo "  Python packages installed successfully."
 
 # Create a global symlink so the tool can find .venv from any directory

@@ -1,5 +1,45 @@
 # mini-wiki 2.0 - Iteration Journal
 
+## Jun 23 -- Full rebuild: Bubbletea stripped, OpenCode-style TUI (IN PROGRESS)
+
+### What was done
+- **Bubbletea completely stripped**: Removed `internal/app/`, `conversation/`, `fileref/`, `filescanner/`, `memory/`, `srs/`, `webfetch/`. Binary dropped from 25MB to 10MB (without TUI embed).
+- **Tool registry**: `internal/tool/` — 11 tools with descriptions and input schemas. `/api/tools` endpoint for dynamic listing.
+- **HTTP server polished**: `internal/server/` — config endpoint, sessions endpoint, tool registry, SSE streaming.
+- **Config layering**: Global `~/.config/mini-wiki/config.yaml` + project `.wiki/config.json` + session overrides.
+- **Session persistence**: `internal/server/session.go` — SQLite-backed JSON sessions in `.wiki/sessions/`. Create/list/append API.
+- **OpenTUI TUI**: `wiki-tui/` — OpenTUI + SolidJS frontend with autocomplete on `/`, markdown rendering, source sidebar, tool-based help.
+- **One-binary embed**: `//go:embed wiki-tui/dist/wiki-tui` via build tag, compiled with `bash scripts/build-tui.sh`.
+- **KNOWN ISSUE**: `requestAnimationFrame` is undefined in bun-compiled binaries. OpenTUI's render loop depends on it, causing a blank terminal (UI mounts but nothing draws). Polyfill added to `wiki-tui/src/index.tsx` but not yet confirmed working.
+
+### Interface changes
+- `main.go`: Removed `--old`, `--inline` flags. Only `wiki`, `wiki --serve`, `wiki --no-start`
+- `internal/tool/`: New package — `Tool`, `Registry`, `InputSchema`, 11 default tools
+- `internal/config/project.go`: New — `ProjectConfig`, `ProjectManager` for `.wiki/config.json`
+- `internal/server/session.go`: New — `Session`, `SessionStore` for conversation persistence
+- `wiki-tui/src/index.tsx`: Added `globalThis.React` polyfill + `requestAnimationFrame` polyfill
+- Removed packages: `app/`, `conversation/`, `fileref/`, `filescanner/`, `memory/`, `srs/`, `webfetch/`, `tuibinary_stub.go`, `tuibinary_embed.go`
+
+### What I struggled with / broke
+- **requestAnimationFrame not found**: bun-compiled binaries don't have `requestAnimationFrame`. OpenTUI's internal render loop uses it. Polyfill added but needs verification.
+- **React vs SolidJS JSX conflict**: bun `build --compile` generates `React.createElement()` calls. Fixed with `globalThis.React` polyfill mapping to SolidJS object creation.
+- **Bun.connect for health check**: bun-compiled `fetch()` can't reach localhost. Replaced with raw TCP `Bun.connect()` ping.
+- **Session persistence naming conflict**: `time` package import collision in handlers.go — manually resolved.
+
+### Test status
+```
+All suites pass.
+Vet: OK.
+Build with tuibuild: OK (128MB binary).
+```
+
+### Handoff to next agent
+1. **CRITICAL**: The `requestAnimationFrame` polyfill in `wiki-tui/src/index.tsx` needs verification. Run `script` to capture terminal output and check if OpenTUI now renders visible content. If it still doesn't work, study how opencode fork handles this — search for `requestAnimationFrame` usage in the opencode repo at `/home/halraggad/my_work/coding_stuff/opencode_source_fork`.
+2. The user mentioned they want the tool to work like `wiki` from anywhere — it's installed at `~/.local/bin/wiki` (128MB, with embedded TUI).
+3. Plan docs in `history/`: `tui-redesign-plan.md`, `opencode-compat-analysis.md`, `final-rebuild-plan.md`, `discussion_point.txt`.
+4. To build: `bash scripts/build-tui.sh`. To rebuild TUI only: `cd wiki-tui && bun build --compile --target=bun --outfile=dist/wiki-tui ./src/index.tsx`.
+5. The old `wiki_3` binary was cleaned up from `~/.local/bin/`.
+
 > This journal is the **handoff document** between agents. Every agent MUST:
 > 1. Read this file first (before plan.md) to understand current state.
 > 2. Append their work at the top under a new date heading.

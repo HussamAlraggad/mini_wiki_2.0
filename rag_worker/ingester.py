@@ -1,6 +1,13 @@
 """
 Ingester module: ingests documents into the vector database.
 Handles large files safely by streaming content and processing in batches.
+
+Supports:
+- Plain text files (.txt, .md, .json, .csv, .tsv, .jsonl, etc.)
+- Office documents (.pdf, .docx, .pptx, .xlsx) via unstructured or LangChain
+- Web content (.html, .htm, .xml, .epub)
+- Scanned documents via Tesseract OCR fallback
+- Extended formats via LangChain document loaders
 """
 
 import hashlib
@@ -12,6 +19,7 @@ from typing import List, Optional
 from rag_worker.chunker import chunk_text
 from rag_worker.embedder import Embedder
 from rag_worker.vectordb import VectorDB
+from rag_worker.ocr import extract_text_with_ocr, is_scanned_document, is_tesseract_available
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +28,9 @@ UNSTRUCTURED_EXTENSIONS = {".pdf", ".docx", ".doc", ".html", ".htm", ".xml", ".e
 
 # Text-based files we handle directly
 TEXT_EXTENSIONS = {".txt", ".md", ".markdown", ".rst", ".json", ".yaml", ".yml", ".toml", ".cfg", ".ini", ".conf", ".env", ".csv", ".tsv", ".jsonl", ".ndjson", ".log", ".sql", ".sh", ".py", ".go", ".js", ".ts", ".xml"}
+
+# Image/scan formats handled by Tesseract OCR
+OCR_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tiff", ".tif", ".bmp", ".pnm", ".webp"}
 
 # Warn if file is larger than this (50MB)
 LARGE_FILE_WARN = 50 * 1024 * 1024
@@ -40,17 +51,19 @@ def get_file_size(path: str) -> int:
 
 
 def get_text_content(path: str) -> Optional[str]:
-    """Extract text content from a file.
+    """Extract text content from a file using the best available method.
 
-    For large files (>50MB), warns and truncates to MAX_FILE_LOAD bytes.
-    For text files, reads the whole content (streaming not needed for display).
-    For PDF/complex, uses unstructured.
+    Pipeline:
+    1. Direct read for plain text files
+    2. LangChain document loaders (if available) for complex formats
+    3. Unstructured library (fallback for PDFs, DOCX, etc.)
+    4. Tesseract OCR (final fallback for scanned documents)
 
     Args:
         path: Path to the file
 
     Returns:
-        Extracted text, or None if extraction fails
+        Extracted text, or None if all methods fail
     """
     ext = os.path.splitext(path)[1].lower()
     file_size = get_file_size(path)
@@ -62,7 +75,7 @@ def get_text_content(path: str) -> Optional[str]:
     if file_size > LARGE_FILE_WARN:
         logger.warning(f"Large file: {path} ({file_size / 1024 / 1024:.1f}MB). Processing in batches...")
 
-    # Text-based files: read directly
+    # 1. Text-based files: read directly
     if ext in TEXT_EXTENSIONS:
         try:
             with open(path, "r", encoding="utf-8", errors="replace") as f:
@@ -71,25 +84,98 @@ def get_text_content(path: str) -> Optional[str]:
             logger.warning(f"Error reading {path}: {e}")
             return None
 
-    # Complex formats: use unstructured
+    # 2. Complex formats: try LangChain document loaders first
     if ext in UNSTRUCTURED_EXTENSIONS:
-        try:
-            from unstructured.partition.auto import partition
+        text = _try_langchain_load(path, ext)
+        if text:
+            return text
 
-            elements = partition(filename=path)
-            return "\n\n".join([str(el) for el in elements])
-        except ImportError:
-            logger.warning("unstructured not installed, reading as raw text")
-            try:
-                with open(path, "r", encoding="utf-8", errors="replace") as f:
-                    return f.read()
-            except Exception:
-                return None
-        except Exception as e:
-            logger.warning(f"Error extracting {path} with unstructured: {e}")
-            return None
+        # 3. Fallback to unstructured
+        text = _try_unstructured_load(path)
+        if text:
+            return text
+
+        # 4. Final fallback: OCR for scanned documents/images
+        if ext in (".pdf",) or ext in OCR_EXTENSIONS:
+            if is_tesseract_available():
+                logger.info(f"Attempting OCR on {path}...")
+                ocr_text = extract_text_with_ocr(path)
+                if ocr_text and not is_scanned_document(ocr_text):
+                    return ocr_text
+                elif ocr_text:
+                    logger.info(f"OCR extracted text from {path} ({len(ocr_text)} chars)")
+
+    # 5. Image files: try OCR directly
+    if ext in OCR_EXTENSIONS:
+        if is_tesseract_available():
+            logger.info(f"Running OCR on image: {path}")
+            return extract_text_with_ocr(path) or None
 
     return None
+
+
+def _try_langchain_load(path: str, ext: str) -> Optional[str]:
+    """Try to load a document using LangChain document loaders."""
+    try:
+        from langchain_community.document_loaders import (
+            PDFLoader,
+            Docx2txtLoader,
+            UnstructuredHTMLLoader,
+            UnstructuredXMLLoader,
+            UnstructuredEPubLoader,
+            UnstructuredPowerPointLoader,
+            UnstructuredExcelLoader,
+        )
+
+        loader_map = {
+            ".pdf": lambda p: PDFLoader(p),
+            ".docx": lambda p: Docx2txtLoader(p),
+            ".doc": lambda p: Docx2txtLoader(p),
+            ".html": lambda p: UnstructuredHTMLLoader(p),
+            ".htm": lambda p: UnstructuredHTMLLoader(p),
+            ".xml": lambda p: UnstructuredXMLLoader(p),
+            ".epub": lambda p: UnstructuredEPubLoader(p),
+            ".ppt": lambda p: UnstructuredPowerPointLoader(p),
+            ".pptx": lambda p: UnstructuredPowerPointLoader(p),
+            ".xls": lambda p: UnstructuredExcelLoader(p),
+            ".xlsx": lambda p: UnstructuredExcelLoader(p),
+        }
+
+        loader_fn = loader_map.get(ext)
+        if loader_fn:
+            loader = loader_fn(path)
+            documents = loader.load()
+            if documents:
+                text = "\n\n".join([doc.page_content for doc in documents])
+                logger.info(f"LangChain loaded {path}: {len(documents)} pages, {len(text)} chars")
+                return text
+    except ImportError:
+        logger.debug("LangChain loaders not available, falling back to unstructured")
+    except Exception as e:
+        logger.warning(f"LangChain loader failed for {path}: {e}")
+    return None
+
+
+def _try_unstructured_load(path: str) -> Optional[str]:
+    """Try to extract text using the unstructured library."""
+    try:
+        from unstructured.partition.auto import partition
+
+        elements = partition(filename=path)
+        text = "\n\n".join([str(el) for el in elements])
+        if text.strip():
+            return text
+    except ImportError:
+        logger.warning("unstructured not available. Install with: pip install unstructured[pdf,docx,md]")
+    except Exception as e:
+        logger.warning(f"Unstructured extraction failed for {path}: {e}")
+
+    # Last resort: read as raw text
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            return f.read()
+    except Exception:
+        return None
 
 
 class IngestionResult:

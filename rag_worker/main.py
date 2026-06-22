@@ -41,6 +41,7 @@ from rag_worker.querier import query, QueryResult
 from rag_worker.agentic_ranker import agentic_rank
 from rag_worker.agentic_query import agentic_query
 from rag_worker.deep_reader import deep_read
+from rag_worker.reranker import Reranker
 
 logging.basicConfig(
     level=logging.WARNING,
@@ -68,6 +69,7 @@ def main():
     # Initialize components
     vector_db = VectorDB(rag_dir)
     embedder = Embedder(model=embed_model, base_url=ollama_url)
+    reranker = Reranker()
 
     # Send ready signal
     send_response({"type": "ready", "embed_model": embed_model, "llm_model": llm_model, "rag_dir": rag_dir})
@@ -151,6 +153,8 @@ def main():
                     ollama_base=ollama_url,
                     deep=deep,
                     deep_model=deep_model,
+                    reranker=reranker,
+                    rewrite_model=current_llm,
                 )
                 send_response({
                     "type": "answer",

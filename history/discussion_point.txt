@@ -1,0 +1,73 @@
+Okay, disucssion time... Use web search to help me learn here, if possible please.
+
+First, is there and MCP that serve the best help, benifit, and support for RAG systems?
+Second, my discussion details (input to you):
+- I got to know that a RAG system is a retrieval augmented generation.
+- A RAG system has a 5 steps process:
+1- Ingestion, where it gets the input, clean (I don't know how), pass it to the next step.
+2- Chunking, which splits data into small parts, or chunks, for step 3.
+3- Embedding, I don't know much about it, but I think it has to do something with vectoriation, and readying the chunks for step 4.
+4- Vector Storage or Database.
+5- Retrieval, in this last step, a text gets retrieved or search for based on the similarity with the users queiry.
+
+Third, after first and second are done, I want to think about using LnagChain & Tesseract in this project if compatible.
+
+Fourth, let's talk about the TUI redesign (the is the least concern here).
+
+#########################################################################33
+
+Progress:
+- Full overview.
+- Quick note for RAG step 4: I don't know what is multi-user, but I'm using this tool on all my machines, any update I make on one of the machines will get push then pulled to the other machines to update the tool and build it there to use it there.
+- RAG step 5 advancement are nice, I would like to explore imlementing them. We can consider that before getting to the TUI Redesign.
+	- Note: Query rewriting is great, I would like to suggestion that when the queiry is rewritten, the actual queiry should also stay present along with the rewritten version so when any further step or progress is made it will be accurate as much as possible, meaning the it will rely on the two present queries the original and the rewritten.
+- Looking at the LangChain compatibility overview, the langChain plays the role of three actors, why don't use instead of the three actors?
+	- I know it may be heavy, that mean bigger worker/actor, that does more stuff, right? we can make use of that, can't we?
+	- But Tesseract is a great added value, I'm with adding it (installing it).
+
+
+
+- requirements.txt pinning is noted.
+	- I agree with that.
+- Queiry update (dual queiry), noted!
+	- let's do that.
+- LangChain is needed indeed, cuz yes, I'm planning on ingestuing docs beyond CSV/Excel files.
+
+
+
+- LangChain Integration Scope: I would love to go with the highest value + the highest feasibility all in one update/solution.
+- Architecture question... I'm not sure about that, maybe elaborate more, or see if the above point here may affect somehow.
+- Advanced RAG:
+	- ~50ms latency per what? How much latency is it on the overall time consumbtion?
+	- I would love to make the ranking a built in functionality, istead of optional functionality/feature.
+		- How does that sound?
+- Multi-machine sync: it's not a problem at all, if use a machine to use the tool, I'll finish the task on the same machine, I won't put extra burden on myself and go to another machine and sync, so no work/update/efforts needed here, keep as is I think.
+
+
+
+- Huge note here: Keep the tool's work, load and all that stuff on the GPU first please, since it's byond just more capable that the CPU.
+- Why keep the /rank command when the process already does the "ranking" since the beginning? Right?
+
+
+
+- I'm thinking about any new model for a replacement or to add to my collection for the tool, is there a need? worthy or not?
+- Thanks for the explanantion about the "/rank" command purpose, we can keep it. That's alright.
+
+#############################################################################
+
+### Session paused: Jun 23, 2026
+
+## Current state:
+- Bubbletea stripped. Tool registry built. Config + sessions APIs done.
+- OpenTUI TUI: renders blank terminal (requestAnimationFrame missing in bun-compiled binary).
+- Fix attempted: polyfill in wiki-tui/src/index.tsx — needs verification.
+- Next step: Verify rAF polyfill works. If not, study opencode fork's approach.
+
+## Build:
+  bash scripts/build-tui.sh    # Full build (TUI + Go embed)
+  wiki                          # Launch from anywhere
+
+## Known issues:
+1. requestAnimationFrame undefined in bun-compiled binaries (OpenTUI render loop)
+2. fetch() to localhost fails in bun-compiled binaries (fixed with TCP ping)
+3. React.createElement used by bun's JSX transform (fixed with globalThis.React polyfill)

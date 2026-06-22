@@ -4,3 +4,13 @@ unstructured[pdf,docx,md]
 pypdf>=3.0.0
 numpy>=1.24.0
 pandas>=2.0.0
+
+# Reranker (cross-encoder for precision improvement)
+sentence-transformers>=3.0.0
+
+# LangChain document loaders (extended file format support)
+langchain>=0.3.0
+langchain-community>=0.3.0
+
+# OCR (scanned document support)
+pytesseract>=0.3.10
